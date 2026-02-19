@@ -1,0 +1,19 @@
+[Unit]
+Description=Tunnel Relay Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/tunnel-server
+Restart=always
+RestartSec=3
+Environment=RUST_LOG=info
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/tunnel-server
+
+[Install]
+WantedBy=multi-user.target

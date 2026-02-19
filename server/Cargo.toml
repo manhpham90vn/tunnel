@@ -2,6 +2,20 @@
 name = "tunnel-server"
 version = "0.1.0"
 edition = "2021"
+description = "Tunnel relay server for secure remote access"
+license = "MIT"
+authors = ["manhpham90vn"]
+
+[package.metadata.deb]
+maintainer = "manhpham90vn"
+section = "net"
+priority = "optional"
+assets = [
+    ["target/release/tunnel-server", "usr/bin/", "755"],
+]
+conf-files = []
+systemd-units = { unit-name = "tunnel-server", enable = true }
+
 
 [dependencies]
 axum = { version = "0.8", features = ["ws"] }
