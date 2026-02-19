@@ -1,48 +1,48 @@
 # 🚇 Tunnel — Remote Access like TeamViewer
 
-Phần mềm tunnel cho phép truy cập từ xa giữa các máy tính thông qua một relay server trung gian. Client đóng vai trò **Agent** — tự động kết nối tới server, sẵn sàng nhận tunnel request từ bất kỳ ai biết Agent ID.
+A tunnel application that enables remote access between computers through a central relay server. The client acts as an **Agent** — it automatically connects to the server and is ready to receive tunnel requests from anyone who knows its Agent ID.
 
-## Kiến trúc tổng quan
+## Architecture Overview
 
 ```
 ┌─────────────────┐         ┌─────────────────┐         ┌─────────────────┐
-│   Agent (máy A) │◄───────►│   Relay Server   │◄───────►│ Controller (B)  │
+│   Agent (PC A)  │◄───────►│   Relay Server   │◄───────►│ Controller (B)  │
 │   Tauri App     │   WS    │   Rust / Axum    │   WS    │   Tauri App     │
 └─────────────────┘         └─────────────────┘         └─────────────────┘
         │                           │                           │
-   TCP Listener              Agent Registry              Nhập Agent ID
-   (local ports)            Session Manager              → tạo tunnel
+   TCP Listener              Agent Registry              Enter Agent ID
+   (local ports)            Session Manager              → create tunnel
 ```
 
-### Thành phần
+### Components
 
-| Thành phần | Công nghệ | Vai trò |
-|-----------|-----------|---------|
-| **Server** | Rust (Axum + Tokio) | Relay server — quản lý agents, chuyển tiếp dữ liệu |
-| **Client** | Rust (Tauri v2) + React | Vừa là Agent (nhận kết nối) vừa là Controller (kết nối tới agent khác) |
+| Component | Technology | Role |
+|-----------|------------|------|
+| **Server** | Rust (Axum + Tokio) | Relay server — manages agents, forwards data |
+| **Client** | Rust (Tauri v2) + React | Acts as both Agent (receives connections) and Controller (connects to other agents) |
 
-## Cách hoạt động
+## How It Works
 
-### 1. Agent Registration (Đăng ký Agent)
+### 1. Agent Registration
 
 ```
 Agent                         Server
   │                              │
   │── WebSocket Connect ────────►│
-  │── Register {agent_id} ─────►│  ← Lưu vào Agent Registry
+  │── Register {agent_id} ─────►│  ← Store in Agent Registry
   │◄─ RegisterOk ───────────────│
   │                              │
-  │◄─── Ping ───────────────────│  ← Heartbeat mỗi 30s
+  │◄─── Ping ───────────────────│  ← Heartbeat every 30s
   │──── Pong ──────────────────►│
 ```
 
-Khi Client (Tauri app) khởi động:
-1. **Tạo Agent ID** — UUID ngắn 8 ký tự (ví dụ: `A3F8-B2C1`), lưu persistent
-2. **Kết nối WebSocket** tới server (`ws://server:7070/ws`)
-3. **Gửi Register** — server lưu agent vào registry
-4. **Heartbeat** — ping/pong mỗi 30s, nếu miss 3 lần → disconnect → auto-reconnect
+When the client (Tauri app) starts:
+1. **Generate Agent ID** — A short 8-character UUID (e.g., `A3F8-B2C1`), stored persistently
+2. **Connect via WebSocket** to the server (`ws://server:7070/ws`)
+3. **Send Register** — the server stores the agent in its registry
+4. **Heartbeat** — ping/pong every 30s; 3 missed pings → disconnect → auto-reconnect
 
-### 2. Tunnel Establishment (Thiết lập Tunnel)
+### 2. Tunnel Establishment
 
 ```
 Controller           Server              Agent
@@ -56,65 +56,75 @@ Controller           Server              Agent
     │◄═ Data ══════════│◄═ Data ═══════════│ ◄─ TCP ─── localhost:22
 ```
 
-Khi Controller muốn truy cập Agent:
-1. **Nhập Agent ID** của máy đích + cấu hình port (ví dụ: forward port 22 của agent)
-2. **Gửi Connect** tới server, server tìm agent trong registry
-3. **Server thông báo** agent có tunnel request
-4. **Agent chấp nhận** → server tạo session, bắt đầu relay
-5. **Dữ liệu TCP** được đóng gói và chuyển tiếp qua WebSocket frames
+When a Controller wants to access an Agent:
+1. **Enter the Agent ID** of the target machine + configure ports (e.g., forward agent's port 22)
+2. **Send Connect** to the server; the server looks up the agent in the registry
+3. **Server notifies** the agent of the tunnel request
+4. **Agent accepts** → server creates a session and begins relaying
+5. **TCP data** is encapsulated and forwarded through WebSocket frames
 
-### 3. Data Relay (Chuyển tiếp dữ liệu)
+### 3. Data Relay
 
 ```
 ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐
-│ App local │     │Controller│     │  Server  │     │  Agent   │     ┌──────────┐
-│ (browser) │     │          │     │  (relay) │     │          │     │ Service  │
-│           │     │          │     │          │     │          │     │ local    │
+│ Local App │     │Controller│     │  Server  │     │  Agent   │     ┌──────────┐
+│ (browser) │     │          │     │  (relay) │     │          │     │ Local    │
+│           │     │          │     │          │     │          │     │ Service  │
 │  :8080 ◄──┼─TCP─┤  encode  ├─WS──┤ forward  ├─WS──┤  decode  ├─TCP─┤ :3000   │
 │           │     │  base64  │     │  binary  │     │  base64  │     │          │
 └──────────┘     └──────────┘     └──────────┘     └──────────┘     └──────────┘
 ```
 
-- Controller mở TCP listener trên `local_port` (ví dụ `:8080`)
-- Khi có connection tới `:8080`, dữ liệu được encode base64 → gửi qua WebSocket
-- Server chuyển tiếp tới Agent dựa trên `session_id`
-- Agent decode → gửi tới `remote_host:remote_port` (ví dụ `localhost:3000`)
-- Response đi ngược lại theo cùng đường
+- The Controller opens a TCP listener on `local_port` (e.g., `:8080`)
+- When a connection arrives on `:8080`, data is base64-encoded → sent via WebSocket
+- The Server forwards it to the Agent based on the `session_id`
+- The Agent decodes → sends to `remote_host:remote_port` (e.g., `localhost:3000`)
+- Responses travel back along the same path
 
 ## Protocol (WebSocket Messages)
 
-Tất cả messages đều là JSON, truyền qua WebSocket text frames.
+All messages are JSON, transmitted via WebSocket text frames.
 
 ### Control Messages
 
 ```jsonc
-// Agent → Server: Đăng ký
+// Agent → Server: Register
 {"type": "register", "agent_id": "A3F8-B2C1"}
 
-// Server → Agent: Xác nhận đăng ký
+// Server → Agent: Registration confirmed
 {"type": "register_ok"}
 
-// Controller → Server: Yêu cầu tunnel
+// Controller → Server: Request tunnel
 {"type": "connect", "target_id": "A3F8-B2C1", "remote_host": "127.0.0.1", "remote_port": 3000}
 
-// Server → Agent: Thông báo tunnel request
+// Server → Agent: Tunnel request notification
 {"type": "tunnel_request", "session_id": "sess-uuid", "remote_host": "127.0.0.1", "remote_port": 3000}
 
-// Agent → Server: Chấp nhận tunnel
+// Agent → Server: Accept tunnel
 {"type": "tunnel_accept", "session_id": "sess-uuid"}
 
-// Server → Controller: Tunnel sẵn sàng
+// Server → Controller: Tunnel ready
 {"type": "tunnel_ready", "session_id": "sess-uuid"}
 
-// Any → Any: Ngắt tunnel
+// Any → Any: Close tunnel
 {"type": "tunnel_close", "session_id": "sess-uuid"}
 ```
 
 ### Data Messages
 
 ```jsonc
-// Truyền dữ liệu TCP qua tunnel
-{"type": "data", "session_id": "sess-uuid", "payload": "<base64-encoded-bytes>"}
+// TCP data transmitted through the tunnel
+{"type": "data", "session_id": "sess-uuid", "stream_id": "stream-uuid", "role": "controller", "payload": "<base64-encoded-bytes>"}
+```
+
+### Stream Multiplexing
+
+```jsonc
+// Open a new stream (one per TCP connection)
+{"type": "stream_open", "session_id": "sess-uuid", "stream_id": "stream-uuid"}
+
+// Close a stream
+{"type": "stream_close", "session_id": "sess-uuid", "stream_id": "stream-uuid"}
 ```
 
 ### Heartbeat
@@ -130,57 +140,71 @@ Tất cả messages đều là JSON, truyền qua WebSocket text frames.
 {"type": "error", "message": "Agent not found"}
 ```
 
-## Cấu trúc thư mục
+## Project Structure
 
 ```
 tunnel/
 ├── server/                    # Relay Server
 │   ├── Cargo.toml
 │   └── src/
-│       └── main.rs            # Axum WebSocket server + relay logic
+│       ├── main.rs            # Entry point — router setup, server start
+│       ├── protocol.rs        # WebSocket message types
+│       ├── state.rs           # Shared state (agents, sessions)
+│       ├── handlers.rs        # WebSocket handlers + message dispatch
+│       └── api.rs             # REST API endpoints
 │
 ├── client/                    # Tauri App (Agent + Controller)
 │   ├── package.json
 │   ├── index.html
 │   ├── src/                   # React Frontend
-│   │   ├── main.tsx
+│   │   ├── main.tsx           # React entry point
 │   │   ├── App.tsx            # Dashboard UI
 │   │   └── App.css            # Dark theme styles
 │   └── src-tauri/             # Rust Backend
 │       ├── Cargo.toml
 │       └── src/
-│           ├── main.rs        # Tauri entry point
-│           └── lib.rs         # Agent logic + Tauri commands
+│           ├── main.rs        # Tauri binary entry point
+│           ├── lib.rs         # App setup + module declarations
+│           ├── protocol.rs    # WebSocket message types
+│           ├── state.rs       # Agent state + data types
+│           ├── commands.rs    # Tauri IPC commands
+│           ├── agent.rs       # WebSocket connection loop
+│           └── relay.rs       # TCP ↔ WebSocket relay
 │
-└── README.md                  # ← Bạn đang đọc file này
+├── .github/workflows/
+│   └── release.yml            # CI/CD: build + release pipeline
+│
+└── README.md
 ```
 
 ## Use Cases
 
-### SSH qua tunnel
+### SSH through a tunnel
+
 ```
-Controller                              Agent (máy remote)
+Controller                              Agent (remote machine)
 ┌──────────┐                           ┌──────────┐
 │ ssh -p   │                           │ sshd     │
-│ 2222     │  ← tunnel qua server →   │ :22      │
+│ 2222     │  ← tunnel via server →    │ :22      │
 │ localhost│                           │          │
 └──────────┘                           └──────────┘
 
-# Trên Controller: forward local port 2222 → agent port 22
-# Sau đó: ssh -p 2222 user@localhost
+# On Controller: forward local port 2222 → agent port 22
+# Then run: ssh -p 2222 user@localhost
 ```
 
-### Web app qua tunnel
+### Web app through a tunnel
+
 ```
-Controller                              Agent (máy remote)
+Controller                              Agent (remote machine)
 ┌──────────┐                           ┌──────────┐
 │ Browser  │                           │ Web App  │
-│ :8080    │  ← tunnel qua server →   │ :3000    │
+│ :8080    │  ← tunnel via server →    │ :3000    │
 │ localhost│                           │          │
 └──────────┘                           └──────────┘
 
-# Trên Controller: forward local port 8080 → agent port 3000
-# Sau đó mở browser: http://localhost:8080
+# On Controller: forward local port 8080 → agent port 3000
+# Then open browser: http://localhost:8080
 ```
 
 ## Tech Stack
@@ -190,14 +214,25 @@ Controller                              Agent (máy remote)
 - **Client Frontend**: React, TypeScript, Vite
 - **Protocol**: WebSocket + JSON control messages + base64 data payload
 
-## Chạy development
+## Development
 
 ```bash
-# 1. Start server
+# 1. Start the relay server
 cd server && cargo run
-# Server sẽ listen trên 0.0.0.0:7070
+# Server will listen on 0.0.0.0:7070
 
-# 2. Start client (dev mode)  
+# 2. Start the client (dev mode)
 cd client && npm run tauri dev
-# App sẽ mở ra, tự động kết nối tới server
+# The app will open and automatically connect to the server
 ```
+
+## Release
+
+The project uses GitHub Actions for CI/CD. Pushing a tag matching `v*` triggers a multi-platform build:
+
+- **macOS**: Universal binary (aarch64 + x86_64) → `.dmg`
+- **Linux**: `.deb` + `.AppImage`
+- **Windows**: `.exe` (NSIS installer)
+- **Server**: Linux binary
+
+All artifacts are uploaded to a GitHub Release automatically.
