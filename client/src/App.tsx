@@ -55,7 +55,6 @@ function App() {
 
   // Connect form fields
   const [targetId, setTargetId] = useState("");
-  const [remoteHost, setRemoteHost] = useState("127.0.0.1");
   const [remotePort, setRemotePort] = useState("22");
   const [localPort, setLocalPort] = useState("2222");
   const [connecting, setConnecting] = useState(false);
@@ -85,6 +84,13 @@ function App() {
     // Connection status changes (connected/disconnected from server)
     listen<boolean>("connection-status", (event) => {
       setConnected(event.payload);
+    }).then((u) => unlisteners.push(u));
+
+    // Server assigned an Agent ID after registration
+    listen<string>("registered", (event) => {
+      setAgentInfo((prev) =>
+        prev ? { ...prev, agent_id: event.payload } : prev
+      );
     }).then((u) => unlisteners.push(u));
 
     // Tunnel list changed — re-fetch the full list from the backend
@@ -135,7 +141,7 @@ function App() {
     try {
       await invoke("connect_to_agent", {
         targetId: targetId.trim(),
-        remoteHost,
+        remoteHost: "127.0.0.1",
         remotePort: parseInt(remotePort),
         localPort: parseInt(localPort),
       });
@@ -248,19 +254,7 @@ function App() {
           </div>
           <div className="input-row">
             <div className="input-group">
-              <label>Agent Target Host</label>
-              <input
-                type="text"
-                placeholder="127.0.0.1"
-                value={remoteHost}
-                onChange={(e) => setRemoteHost(e.target.value)}
-              />
-              <span className="input-hint">
-                Host on agent's machine to forward to
-              </span>
-            </div>
-            <div className="input-group">
-              <label>Agent Target Port</label>
+              <label>Target Port (on agent's machine)</label>
               <input
                 type="number"
                 placeholder="22"
@@ -271,15 +265,15 @@ function App() {
                 e.g. 22 (SSH), 3000 (web)
               </span>
             </div>
-          </div>
-          <div className="input-group">
-            <label>Local Port (listen on your machine)</label>
-            <input
-              type="number"
-              placeholder="2222"
-              value={localPort}
-              onChange={(e) => setLocalPort(e.target.value)}
-            />
+            <div className="input-group">
+              <label>Local Port (on your machine)</label>
+              <input
+                type="number"
+                placeholder="2222"
+                value={localPort}
+                onChange={(e) => setLocalPort(e.target.value)}
+              />
+            </div>
           </div>
           <button
             type="submit"
