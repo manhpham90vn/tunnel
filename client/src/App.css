@@ -1,0 +1,436 @@
+/* ─── CSS Reset & Root ─────────────────────────────────────────── */
+
+*,
+*::before,
+*::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+:root {
+  --bg-primary: #0a0e1a;
+  --bg-secondary: #111827;
+  --bg-card: rgba(17, 24, 39, 0.7);
+  --bg-card-hover: rgba(17, 24, 39, 0.9);
+  --bg-input: rgba(30, 41, 59, 0.8);
+  --border: rgba(56, 189, 248, 0.15);
+  --border-hover: rgba(56, 189, 248, 0.3);
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --accent: #38bdf8;
+  --accent-glow: rgba(56, 189, 248, 0.2);
+  --accent-hover: #7dd3fc;
+  --success: #34d399;
+  --success-glow: rgba(52, 211, 153, 0.3);
+  --danger: #f87171;
+  --danger-glow: rgba(248, 113, 113, 0.3);
+  --warning: #fbbf24;
+
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  min-height: 100vh;
+  background:
+    radial-gradient(ellipse at 20% 50%, rgba(56, 189, 248, 0.05) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 50%, rgba(139, 92, 246, 0.03) 0%, transparent 50%),
+    var(--bg-primary);
+}
+
+/* ─── App Container ────────────────────────────────────────────── */
+
+.app {
+  max-width: 620px;
+  margin: 0 auto;
+  padding: 24px 20px;
+}
+
+/* ─── Header ───────────────────────────────────────────────────── */
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.header-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, var(--accent), #8b5cf6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  box-shadow: 0 4px 16px var(--accent-glow);
+}
+
+.header-text h1 {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  background: linear-gradient(135deg, var(--text-primary), var(--accent));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.header-text p {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 1px;
+}
+
+/* ─── Cards ────────────────────────────────────────────────────── */
+
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 18px;
+  margin-bottom: 16px;
+  backdrop-filter: blur(12px);
+  transition: border-color 0.2s ease;
+}
+
+.card:hover {
+  border-color: var(--border-hover);
+}
+
+.card-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin-bottom: 14px;
+}
+
+/* ─── Agent Info ───────────────────────────────────────────────── */
+
+.agent-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.agent-id-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.agent-id-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.agent-id-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.agent-id {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  text-shadow: 0 0 20px var(--accent-glow);
+}
+
+.copy-btn {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  transition: all 0.2s ease;
+}
+
+.copy-btn:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.copy-btn.copied {
+  border-color: var(--success);
+  color: var(--success);
+}
+
+/* ─── Status Badge ─────────────────────────────────────────────── */
+
+.status-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.status-badge.connected {
+  background: rgba(52, 211, 153, 0.1);
+  color: var(--success);
+  border: 1px solid rgba(52, 211, 153, 0.2);
+}
+
+.status-badge.disconnected {
+  background: rgba(248, 113, 113, 0.1);
+  color: var(--danger);
+  border: 1px solid rgba(248, 113, 113, 0.2);
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.status-dot.connected {
+  background: var(--success);
+  box-shadow: 0 0 8px var(--success-glow);
+  animation: pulse 2s infinite;
+}
+
+.status-dot.disconnected {
+  background: var(--danger);
+  box-shadow: 0 0 8px var(--danger-glow);
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* ─── Connect Form ─────────────────────────────────────────────── */
+
+.connect-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.input-group label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.input-group input {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 14px;
+  color: var(--text-primary);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.input-group input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.input-group input::placeholder {
+  color: var(--text-muted);
+}
+
+.input-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.connect-btn {
+  background: linear-gradient(135deg, var(--accent), #818cf8);
+  border: none;
+  border-radius: 10px;
+  padding: 11px 20px;
+  color: white;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  box-shadow: 0 4px 16px var(--accent-glow);
+  margin-top: 2px;
+}
+
+.connect-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 24px rgba(56, 189, 248, 0.3);
+}
+
+.connect-btn:active {
+  transform: translateY(0);
+}
+
+.connect-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* ─── Tunnels Table ────────────────────────────────────────────── */
+
+.tunnels-empty {
+  text-align: center;
+  padding: 20px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.tunnel-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--bg-input);
+  margin-bottom: 8px;
+  border: 1px solid transparent;
+  transition: all 0.2s ease;
+}
+
+.tunnel-item:hover {
+  border-color: var(--border-hover);
+}
+
+.tunnel-item:last-child {
+  margin-bottom: 0;
+}
+
+.tunnel-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.tunnel-session {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.tunnel-details {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.tunnel-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.tunnel-direction {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-weight: 500;
+}
+
+.tunnel-direction.incoming {
+  background: rgba(139, 92, 246, 0.15);
+  color: #a78bfa;
+}
+
+.tunnel-direction.outgoing {
+  background: rgba(56, 189, 248, 0.15);
+  color: var(--accent);
+}
+
+.tunnel-status {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-weight: 500;
+}
+
+.tunnel-status.active {
+  background: rgba(52, 211, 153, 0.15);
+  color: var(--success);
+}
+
+.tunnel-status.connecting {
+  background: rgba(251, 191, 36, 0.15);
+  color: var(--warning);
+}
+
+.tunnel-status.error {
+  background: rgba(248, 113, 113, 0.15);
+  color: var(--danger);
+}
+
+.disconnect-btn {
+  background: transparent;
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  border-radius: 8px;
+  padding: 5px 12px;
+  color: var(--danger);
+  font-size: 11px;
+  font-family: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.disconnect-btn:hover {
+  background: rgba(248, 113, 113, 0.1);
+  border-color: var(--danger);
+}
+
+/* ─── Error Toast ──────────────────────────────────────────────── */
+
+.error-toast {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(248, 113, 113, 0.15);
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  border-radius: 12px;
+  padding: 12px 20px;
+  color: var(--danger);
+  font-size: 13px;
+  backdrop-filter: blur(12px);
+  animation: slideUp 0.3s ease;
+  z-index: 100;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
