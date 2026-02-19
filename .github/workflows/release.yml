@@ -145,7 +145,7 @@ jobs:
           draft: false
           generate_release_notes: true
           files: |
-            artifacts/dist-macos/*
-            artifacts/dist-linux/*
-            artifacts/dist-windows/*
-            artifacts/dist-server/*
+            artifacts/dist-macos/**/*
+            artifacts/dist-linux/**/*
+            artifacts/dist-windows/**/*
+            artifacts/dist-server/**/*
