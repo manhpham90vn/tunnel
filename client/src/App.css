@@ -219,6 +219,49 @@ body {
   50% { opacity: 0.5; }
 }
 
+/* ─── Server URL ───────────────────────────────────────────────── */
+
+.server-url-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.server-url-row input {
+  flex: 1;
+}
+
+.save-btn {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 16px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.save-btn:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.save-btn.saved {
+  border-color: var(--success);
+  color: var(--success);
+}
+
+.input-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
 /* ─── Connect Form ─────────────────────────────────────────────── */
 
 .connect-form {
