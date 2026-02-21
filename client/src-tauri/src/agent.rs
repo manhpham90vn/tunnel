@@ -21,8 +21,6 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-
-
 /// How long to wait before attempting to reconnect after a disconnect.
 const RECONNECT_DELAY_SECS: u64 = 3;
 
@@ -251,8 +249,7 @@ async fn handle_server_message(
                                 match listener.accept().await {
                                     Ok((tcp_stream, peer)) => {
                                         // Generate a unique stream ID for this TCP connection
-                                        let stream_id =
-                                            Uuid::new_v4().to_string()[..8].to_string();
+                                        let stream_id = Uuid::new_v4().to_string()[..8].to_string();
                                         info!(
                                             "New stream {} from {} (tunnel {})",
                                             stream_id, peer, sid
@@ -269,8 +266,7 @@ async fn handle_server_message(
                                         // while the relay task starts up, preventing a race condition.
                                         let (data_tx, data_rx) =
                                             mpsc::unbounded_channel::<Vec<u8>>();
-                                        let channel_key =
-                                            format!("controller-{}", stream_id);
+                                        let channel_key = format!("controller-{}", stream_id);
                                         {
                                             state_clone
                                                 .data_channels

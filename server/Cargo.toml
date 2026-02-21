@@ -1,6 +1,6 @@
 [package]
 name = "tunnel-server"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Tunnel relay server for secure remote access"
 license = "MIT"
@@ -14,7 +14,7 @@ assets = [
     ["target/release/tunnel-server", "usr/bin/", "755"],
 ]
 conf-files = []
-systemd-units = { unit-name = "tunnel-server", enable = true }
+systemd-units = { unit-name = "tunnel-server", unit-scripts = ".", enable = true }
 
 
 [dependencies]

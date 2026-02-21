@@ -50,9 +50,9 @@ async fn main() {
 
     // Build the Axum router with WebSocket and REST endpoints
     let app = Router::new()
-        .route("/ws", get(handlers::ws_handler))         // WebSocket upgrade
-        .route("/api/agents", get(api::list_agents))      // REST: list agents
-        .layer(CorsLayer::permissive())                   // Allow all CORS origins
+        .route("/ws", get(handlers::ws_handler)) // WebSocket upgrade
+        .route("/api/agents", get(api::list_agents)) // REST: list agents
+        .layer(CorsLayer::permissive()) // Allow all CORS origins
         .with_state(state);
 
     // Bind to all interfaces on port 7070

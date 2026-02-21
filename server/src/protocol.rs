@@ -16,7 +16,6 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WsMessage {
     // ── Registration ──────────────────────────────────────────────
-
     /// Sent by a client to request registration as an agent.
     /// The server will generate a unique Agent ID and respond
     /// with `RegisterOk { agent_id }`.
@@ -27,7 +26,6 @@ pub enum WsMessage {
     RegisterOk { agent_id: String },
 
     // ── Tunnel Lifecycle ──────────────────────────────────────────
-
     /// Sent by a controller to request a tunnel to a specific agent.
     /// The server looks up `target_id` in the agent registry and, if found,
     /// forwards a `TunnelRequest` to that agent.
@@ -61,7 +59,6 @@ pub enum WsMessage {
     // ── Stream Multiplexing ───────────────────────────────────────
     // A single tunnel session can carry multiple independent TCP
     // connections (streams). Each stream has its own `stream_id`.
-
     /// Opens a new stream within an existing tunnel session.
     /// The controller sends this when a new TCP connection arrives
     /// on the local listener; the agent then opens a TCP connection
@@ -79,7 +76,6 @@ pub enum WsMessage {
     },
 
     // ── Data Relay ────────────────────────────────────────────────
-
     /// Carries TCP data through the tunnel. The payload is base64-encoded
     /// bytes. The `role` field ("agent" or "controller") indicates who
     /// sent the data, allowing the server to route it to the other side.
@@ -91,7 +87,6 @@ pub enum WsMessage {
     },
 
     // ── Heartbeat ─────────────────────────────────────────────────
-
     /// Heartbeat request, sent periodically to keep the connection alive.
     Ping,
 
@@ -99,7 +94,6 @@ pub enum WsMessage {
     Pong,
 
     // ── Error ─────────────────────────────────────────────────────
-
     /// Error notification with a human-readable message.
     Error { message: String },
 }
