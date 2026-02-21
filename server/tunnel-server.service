@@ -1,19 +1,40 @@
 [Unit]
 Description=Tunnel Relay Server
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 ExecStart=/usr/bin/tunnel-server
 Restart=always
 RestartSec=3
+
+# Logging
 Environment=RUST_LOG=info
+
+# Run as dedicated user (create with: sudo useradd -r -s /usr/sbin/nologin tunnel)
+DynamicUser=true
 
 # Security hardening
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/tunnel-server
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+# Network: only allow IPv4/IPv6
+RestrictAddressFamilies=AF_INET AF_INET6
+
+# Limit resources
+LimitNOFILE=65535
 
 [Install]
 WantedBy=multi-user.target
