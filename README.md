@@ -1,238 +1,188 @@
-# 🚇 Tunnel — Remote Access like TeamViewer
+# 🚇 Tunnel
 
-A tunnel application that enables remote access between computers through a central relay server. The client acts as an **Agent** — it automatically connects to the server and is ready to receive tunnel requests from anyone who knows its Agent ID.
-
-## Architecture Overview
-
-```
-┌─────────────────┐         ┌─────────────────┐         ┌─────────────────┐
-│   Agent (PC A)  │◄───────►│   Relay Server   │◄───────►│ Controller (B)  │
-│   Tauri App     │   WS    │   Rust / Axum    │   WS    │   Tauri App     │
-└─────────────────┘         └─────────────────┘         └─────────────────┘
-        │                           │                           │
-   TCP Listener              Agent Registry              Enter Agent ID
-   (local ports)            Session Manager              → create tunnel
-```
-
-### Components
-
-| Component | Technology | Role |
-|-----------|------------|------|
-| **Server** | Rust (Axum + Tokio) | Relay server — manages agents, forwards data |
-| **Client** | Rust (Tauri v2) + React | Acts as both Agent (receives connections) and Controller (connects to other agents) |
+Remote access between computers through a central relay server, similar to TeamViewer. The client acts as both an **Agent** (receives incoming tunnel requests) and a **Controller** (connects to remote agents).
 
 ## How It Works
 
-### 1. Agent Registration
-
 ```
-Agent                         Server
-  │                              │
-  │── WebSocket Connect ────────►│
-  │── Register {agent_id} ─────►│  ← Store in Agent Registry
-  │◄─ RegisterOk ───────────────│
-  │                              │
-  │◄─── Ping ───────────────────│  ← Heartbeat every 30s
-  │──── Pong ──────────────────►│
+┌─────────────────┐         ┌─────────────────┐         ┌─────────────────┐
+│   Agent (PC A)  │◄──WS───►│  Relay Server   │◄──WS───►│ Controller (B)  │
+│   Tauri App     │         │  Rust / Axum    │         │  Tauri App      │
+└────────┬────────┘         └─────────────────┘         └────────┬────────┘
+         │                                                       │
+    TCP to local                                            TCP listener
+    services                                                on local port
 ```
 
-When the client (Tauri app) starts:
-1. **Generate Agent ID** — A short 8-character UUID (e.g., `A3F8-B2C1`), stored persistently
-2. **Connect via WebSocket** to the server (`ws://server:7070/ws`)
-3. **Send Register** — the server stores the agent in its registry
-4. **Heartbeat** — ping/pong every 30s; 3 missed pings → disconnect → auto-reconnect
+1. **Agent** registers with the relay server and receives a unique Agent ID (e.g., `A3F8-B2C1`)
+2. **Controller** enters the Agent ID, specifies target and local ports → creates a tunnel
+3. Data is relayed: `Controller local port` ↔ `WebSocket` ↔ `Agent target service`
+4. Agent auto-reconnects every 3 seconds if disconnected, with 30-second heartbeat keep-alive
 
-### 2. Tunnel Establishment
+---
 
-```
-Controller           Server              Agent
-    │                   │                   │
-    │── Connect ──────►│                   │
-    │  {target_id}     │── TunnelRequest ─►│
-    │                   │◄─ TunnelAccept ──│
-    │◄─ TunnelReady ───│                   │
-    │                   │                   │
-    │══ Data ═════════►│══ Data ══════════►│ ── TCP ──► localhost:22
-    │◄═ Data ══════════│◄═ Data ═══════════│ ◄─ TCP ─── localhost:22
-```
+## Installation
 
-When a Controller wants to access an Agent:
-1. **Enter the Agent ID** of the target machine + configure ports (e.g., forward agent's port 22)
-2. **Send Connect** to the server; the server looks up the agent in the registry
-3. **Server notifies** the agent of the tunnel request
-4. **Agent accepts** → server creates a session and begins relaying
-5. **TCP data** is encapsulated and forwarded through WebSocket frames
+### Client (Tunnel Agent)
 
-### 3. Data Relay
+Download the installer for your OS from [GitHub Releases](../../releases/latest):
 
-```
-┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐
-│ Local App │     │Controller│     │  Server  │     │  Agent   │     ┌──────────┐
-│ (browser) │     │          │     │  (relay) │     │          │     │ Local    │
-│           │     │          │     │          │     │          │     │ Service  │
-│  :8080 ◄──┼─TCP─┤  encode  ├─WS──┤ forward  ├─WS──┤  decode  ├─TCP─┤ :3000   │
-│           │     │  base64  │     │  binary  │     │  base64  │     │          │
-└──────────┘     └──────────┘     └──────────┘     └──────────┘     └──────────┘
+| OS                        | File                                |
+| ------------------------- | ----------------------------------- |
+| **macOS** (Universal)     | `Tunnel Agent_x.x.x_universal.dmg`  |
+| **Linux** (Debian/Ubuntu) | `tunnel-agent_x.x.x_amd64.deb`      |
+| **Linux** (Other)         | `tunnel-agent_x.x.x_amd64.AppImage` |
+| **Windows**               | `Tunnel Agent_x.x.x_x64-setup.exe`  |
+
+#### macOS
+
+```bash
+open Tunnel\ Agent_*.dmg
+# Drag "Tunnel Agent" to Applications
 ```
 
-- The Controller opens a TCP listener on `local_port` (e.g., `:8080`)
-- When a connection arrives on `:8080`, data is base64-encoded → sent via WebSocket
-- The Server forwards it to the Agent based on the `session_id`
-- The Agent decodes → sends to `remote_host:remote_port` (e.g., `localhost:3000`)
-- Responses travel back along the same path
+#### Linux (Debian/Ubuntu)
 
-## Protocol (WebSocket Messages)
-
-All messages are JSON, transmitted via WebSocket text frames.
-
-### Control Messages
-
-```jsonc
-// Agent → Server: Register
-{"type": "register", "agent_id": "A3F8-B2C1"}
-
-// Server → Agent: Registration confirmed
-{"type": "register_ok"}
-
-// Controller → Server: Request tunnel
-{"type": "connect", "target_id": "A3F8-B2C1", "remote_host": "127.0.0.1", "remote_port": 3000}
-
-// Server → Agent: Tunnel request notification
-{"type": "tunnel_request", "session_id": "sess-uuid", "remote_host": "127.0.0.1", "remote_port": 3000}
-
-// Agent → Server: Accept tunnel
-{"type": "tunnel_accept", "session_id": "sess-uuid"}
-
-// Server → Controller: Tunnel ready
-{"type": "tunnel_ready", "session_id": "sess-uuid"}
-
-// Any → Any: Close tunnel
-{"type": "tunnel_close", "session_id": "sess-uuid"}
+```bash
+sudo dpkg -i tunnel-agent_*_amd64.deb
 ```
 
-### Data Messages
+#### Linux (AppImage)
 
-```jsonc
-// TCP data transmitted through the tunnel
-{"type": "data", "session_id": "sess-uuid", "stream_id": "stream-uuid", "role": "controller", "payload": "<base64-encoded-bytes>"}
+```bash
+chmod +x tunnel-agent_*_amd64.AppImage
+./tunnel-agent_*_amd64.AppImage
 ```
 
-### Stream Multiplexing
+#### Windows
 
-```jsonc
-// Open a new stream (one per TCP connection)
-{"type": "stream_open", "session_id": "sess-uuid", "stream_id": "stream-uuid"}
+Run `Tunnel Agent_x.x.x_x64-setup.exe` and follow the installer.
 
-// Close a stream
-{"type": "stream_close", "session_id": "sess-uuid", "stream_id": "stream-uuid"}
+---
+
+### Server (Relay Server)
+
+The relay server forwards data between Agents and Controllers. Install it on a machine with a public IP address.
+
+Download `tunnel-server_x.x.x_amd64.deb` from [GitHub Releases](../../releases/latest):
+
+```bash
+# Install (systemd service is enabled automatically)
+sudo dpkg -i tunnel-server_*_amd64.deb
+
+# Check status
+sudo systemctl status tunnel-server
+
+# View logs
+sudo journalctl -u tunnel-server -f
 ```
 
-### Heartbeat
+The server listens on `0.0.0.0:7070` by default. Log level can be configured via the `RUST_LOG` environment variable.
 
-```jsonc
-{"type": "ping"}
-{"type": "pong"}
+#### Uninstall
+
+```bash
+sudo systemctl stop tunnel-server
+sudo dpkg -r tunnel-server
 ```
 
-### Error
+---
 
-```jsonc
-{"type": "error", "message": "Agent not found"}
+## Usage
+
+### 1. Set Up the Server
+
+Install the relay server on a machine with a public IP. Ensure port **7070** is open in the firewall.
+
+### 2. Connect the Agent
+
+1. Open **Tunnel Agent** on the machine you want to access remotely
+2. In **Server Settings**, enter the server IP and port (default: `7070`), then click **Save**
+3. The app auto-connects and displays your **Agent ID** — share this ID with the Controller
+
+### 3. Create a Tunnel (Controller)
+
+1. Open **Tunnel Agent** on your local machine
+2. In **Connect to Agent**, enter the target's **Agent ID**
+3. Set **Target Port** (the port on the agent's machine, e.g., `22` for SSH)
+4. Set **Local Port** (the port on your machine to access through, e.g., `2222`)
+5. Click **Connect**
+6. Access the remote service via `localhost:<local_port>`
+
+### Example: SSH
+
+```bash
+# Target Port: 22, Local Port: 2222
+ssh -p 2222 user@localhost
 ```
 
-## Project Structure
+### Example: Web App
 
-```
-tunnel/
-├── server/                    # Relay Server
-│   ├── Cargo.toml
-│   └── src/
-│       ├── main.rs            # Entry point — router setup, server start
-│       ├── protocol.rs        # WebSocket message types
-│       ├── state.rs           # Shared state (agents, sessions)
-│       ├── handlers.rs        # WebSocket handlers + message dispatch
-│       └── api.rs             # REST API endpoints
-│
-├── client/                    # Tauri App (Agent + Controller)
-│   ├── package.json
-│   ├── index.html
-│   ├── src/                   # React Frontend
-│   │   ├── main.tsx           # React entry point
-│   │   ├── App.tsx            # Dashboard UI
-│   │   └── App.css            # Dark theme styles
-│   └── src-tauri/             # Rust Backend
-│       ├── Cargo.toml
-│       └── src/
-│           ├── main.rs        # Tauri binary entry point
-│           ├── lib.rs         # App setup + module declarations
-│           ├── protocol.rs    # WebSocket message types
-│           ├── state.rs       # Agent state + data types
-│           ├── commands.rs    # Tauri IPC commands
-│           ├── agent.rs       # WebSocket connection loop
-│           └── relay.rs       # TCP ↔ WebSocket relay
-│
-├── .github/workflows/
-│   └── release.yml            # CI/CD: build + release pipeline
-│
-└── README.md
+```bash
+# Target Port: 3000, Local Port: 8080
+# Open http://localhost:8080 in your browser
 ```
 
-## Use Cases
+---
 
-### SSH through a tunnel
+## Server API
 
-```
-Controller                              Agent (remote machine)
-┌──────────┐                           ┌──────────┐
-│ ssh -p   │                           │ sshd     │
-│ 2222     │  ← tunnel via server →    │ :22      │
-│ localhost│                           │          │
-└──────────┘                           └──────────┘
+| Endpoint      | Method | Description                                |
+| ------------- | ------ | ------------------------------------------ |
+| `/ws`         | GET    | WebSocket upgrade (agents and controllers) |
+| `/api/agents` | GET    | List connected agents (JSON array)         |
 
-# On Controller: forward local port 2222 → agent port 22
-# Then run: ssh -p 2222 user@localhost
-```
-
-### Web app through a tunnel
-
-```
-Controller                              Agent (remote machine)
-┌──────────┐                           ┌──────────┐
-│ Browser  │                           │ Web App  │
-│ :8080    │  ← tunnel via server →    │ :3000    │
-│ localhost│                           │          │
-└──────────┘                           └──────────┘
-
-# On Controller: forward local port 8080 → agent port 3000
-# Then open browser: http://localhost:8080
-```
-
-## Tech Stack
-
-- **Server**: Rust, Axum, Tokio, WebSocket (tokio-tungstenite)
-- **Client Backend**: Rust, Tauri v2, Tokio
-- **Client Frontend**: React, TypeScript, Vite
-- **Protocol**: WebSocket + JSON control messages + base64 data payload
+---
 
 ## Development
 
-```bash
-# 1. Start the relay server
-cd server && cargo run
-# Server will listen on 0.0.0.0:7070
+### Prerequisites
 
-# 2. Start the client (dev mode)
+- Rust (stable)
+- Node.js 20+
+- Linux system libraries: `libwebkit2gtk-4.1-dev`, `libappindicator3-dev`, `librsvg2-dev`, `patchelf`
+
+### Run Locally
+
+```bash
+# Start the relay server (listens on 0.0.0.0:7070)
+cd server && cargo run
+
+# Start the client in dev mode
 cd client && npm run tauri dev
-# The app will open and automatically connect to the server
 ```
 
-## Release
+### Build
 
-The project uses GitHub Actions for CI/CD. Pushing a tag matching `v*` triggers a multi-platform build:
+```bash
+# Server .deb package
+cd server && cargo deb
 
-- **macOS**: Universal binary (aarch64 + x86_64) → `.dmg`
-- **Linux**: `.deb` + `.AppImage`
-- **Windows**: `.exe` (NSIS installer)
-- **Server**: Linux binary
+# Client desktop app
+cd client && npx tauri build
+```
 
-All artifacts are uploaded to a GitHub Release automatically.
+### Lint
+
+```bash
+# Server
+cd server && cargo fmt --check && cargo clippy -- -D warnings
+
+# Client
+cd client/src-tauri && cargo fmt --check && cargo clippy -- -D warnings
+```
+
+---
+
+## Tech Stack
+
+| Component           | Technology                   |
+| ------------------- | ---------------------------- |
+| **Server**          | Rust, Axum, Tokio, WebSocket |
+| **Client Backend**  | Rust, Tauri v2, Tokio        |
+| **Client Frontend** | React, TypeScript, Vite      |
+| **Protocol**        | WebSocket + JSON + base64    |
+
+## License
+
+MIT
