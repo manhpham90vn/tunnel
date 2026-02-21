@@ -41,6 +41,7 @@ pub struct AgentInfo {
 
 /// Metadata for an active tunnel session between a controller and an agent.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct TunnelSession {
     /// Unique identifier for this tunnel session (short UUID).
     pub session_id: String,

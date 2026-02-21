@@ -56,6 +56,7 @@ pub struct AgentStatus {
 /// Temporary storage for a pending outgoing tunnel connection.
 /// Stored while waiting for the server to confirm the tunnel is ready.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct PendingConnect {
     /// The local port to listen on once the tunnel is established.
     pub local_port: u16,
@@ -168,4 +169,3 @@ impl AgentState {
         }
     }
 }
-

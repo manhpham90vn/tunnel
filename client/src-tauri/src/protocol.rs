@@ -14,7 +14,6 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WsMessage {
     // ── Registration ──────────────────────────────────────────────
-
     /// Request registration as an agent on the relay server.
     /// The server will generate and assign a unique Agent ID.
     Register,
@@ -23,7 +22,6 @@ pub enum WsMessage {
     RegisterOk { agent_id: String },
 
     // ── Tunnel Lifecycle ──────────────────────────────────────────
-
     /// Request a tunnel to a target agent (sent by controller).
     Connect {
         target_id: String,
@@ -48,7 +46,6 @@ pub enum WsMessage {
     TunnelClose { session_id: String },
 
     // ── Stream Multiplexing ───────────────────────────────────────
-
     /// Open a new TCP stream within an existing tunnel session.
     StreamOpen {
         session_id: String,
@@ -62,7 +59,6 @@ pub enum WsMessage {
     },
 
     // ── Data Relay ────────────────────────────────────────────────
-
     /// Carry base64-encoded TCP data through the tunnel.
     /// `role` indicates who sent the data ("agent" or "controller").
     Data {
@@ -73,7 +69,6 @@ pub enum WsMessage {
     },
 
     // ── Heartbeat ─────────────────────────────────────────────────
-
     /// Heartbeat request.
     Ping,
 
@@ -81,7 +76,6 @@ pub enum WsMessage {
     Pong,
 
     // ── Error ─────────────────────────────────────────────────────
-
     /// Error notification from the server.
     Error { message: String },
 }

@@ -56,8 +56,7 @@ pub fn run() {
             // with its own Tokio runtime. This keeps the agent loop isolated
             // from Tauri's main thread and event loop.
             std::thread::spawn(move || {
-                let rt = tokio::runtime::Runtime::new()
-                    .expect("Failed to create Tokio runtime");
+                let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
                 rt.block_on(async move {
                     agent::run_agent_loop(state, app_handle).await;
                 });

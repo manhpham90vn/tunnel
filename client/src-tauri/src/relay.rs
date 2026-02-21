@@ -41,6 +41,7 @@ use tokio::sync::mpsc;
 ///   data channel is dropped
 /// - On exit: removes the data channel entry and sends a `StreamClose`
 ///   message to notify the other side
+#[allow(clippy::too_many_arguments)]
 pub async fn handle_stream_relay(
     tcp_stream: TcpStream,
     session_id: String,

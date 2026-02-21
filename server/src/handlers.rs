@@ -28,10 +28,7 @@ use uuid::Uuid;
 /// This is the entry point for all WebSocket clients (both agents and
 /// controllers). After the upgrade, the connection is handled by
 /// [`handle_connection`].
-pub async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_connection(socket, state))
 }
 
@@ -63,8 +60,7 @@ async fn handle_connection(socket: WebSocket, state: AppState) {
     // Track the agent ID if this connection registers as an agent.
     // Protected by a Mutex because it's shared between the inbound
     // processing loop and the cleanup phase.
-    let agent_id: Arc<tokio::sync::Mutex<Option<String>>> =
-        Arc::new(tokio::sync::Mutex::new(None));
+    let agent_id: Arc<tokio::sync::Mutex<Option<String>>> = Arc::new(tokio::sync::Mutex::new(None));
 
     // ── Outbound Task ──
     // Spawns a separate task that drains the message queue and sends
@@ -187,7 +183,9 @@ async fn handle_message(
             let aid = generate_agent_id();
             info!("Agent registered: {} (conn={})", aid, conn_id);
             // Store the agent in the registry with its message sender
-            state.agents.insert(aid.clone(), AgentInfo { tx: tx.clone() });
+            state
+                .agents
+                .insert(aid.clone(), AgentInfo { tx: tx.clone() });
             // Remember this connection's agent ID for cleanup on disconnect
             *agent_id.lock().await = Some(aid.clone());
             // Send the assigned ID back to the client

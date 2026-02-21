@@ -36,6 +36,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.rust-targets }}
+          components: rustfmt, clippy
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -55,6 +56,14 @@ jobs:
       - name: Install frontend dependencies
         working-directory: client
         run: npm ci
+
+      - name: Check formatting
+        working-directory: client/src-tauri
+        run: cargo fmt --check
+
+      - name: Run clippy
+        working-directory: client/src-tauri
+        run: cargo clippy -- -D warnings
 
       - name: Build Tauri app (macOS universal)
         if: matrix.platform == 'macos-latest'
@@ -103,11 +112,21 @@ jobs:
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
           workspaces: server
+
+      - name: Check formatting
+        working-directory: server
+        run: cargo fmt --check
+
+      - name: Run clippy
+        working-directory: server
+        run: cargo clippy -- -D warnings
 
       - name: Install cargo-deb
         run: cargo install cargo-deb

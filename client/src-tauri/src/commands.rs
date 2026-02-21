@@ -108,7 +108,10 @@ pub async fn connect_to_agent(
     // Notify the frontend to refresh the tunnel list
     let _ = app_handle.emit("tunnels-updated", ());
 
-    info!("Connect request → agent {} (local={})", target_id, local_port);
+    info!(
+        "Connect request → agent {} (local={})",
+        target_id, local_port
+    );
     Ok(session_id)
 }
 
