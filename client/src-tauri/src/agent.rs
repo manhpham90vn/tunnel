@@ -34,25 +34,28 @@ pub async fn run_agent_loop(state: Arc<AgentState>, app_handle: tauri::AppHandle
     let ca_path = std::env::var("TUNNEL_CA_CERT").ok();
     let mut use_custom_ca = false;
     let mut roots = rustls::RootCertStore::empty();
-    
+
     if let Some(path) = &ca_path {
         if let Ok(cert_bytes) = std::fs::read(path) {
             let certs = rustls_pemfile::certs(&mut &cert_bytes[..])
                 .filter_map(Result::ok)
                 .collect::<Vec<_>>();
-            
+
             if !certs.is_empty() {
                 let (added, ignored) = roots.add_parsable_certificates(certs);
                 if added > 0 {
-                     use_custom_ca = true;
-                     info!("Loaded {} custom CA certificate(s) from {} (ignored: {})", added, path, ignored);
+                    use_custom_ca = true;
+                    info!(
+                        "Loaded {} custom CA certificate(s) from {} (ignored: {})",
+                        added, path, ignored
+                    );
                 }
             }
         } else {
-             error!("Failed to read custom CA certificate at {}", path);
+            error!("Failed to read custom CA certificate at {}", path);
         }
     }
-    
+
     let mut crypto = if use_custom_ca {
         rustls::ClientConfig::builder()
             .with_root_certificates(roots)
@@ -64,7 +67,7 @@ pub async fn run_agent_loop(state: Arc<AgentState>, app_handle: tauri::AppHandle
             .with_custom_certificate_verifier(SkipServerVerification::new())
             .with_no_client_auth()
     };
-    
+
     crypto.alpn_protocols = vec![b"tunnel".to_vec()];
     let quic_client_config = quinn::crypto::rustls::QuicClientConfig::try_from(crypto).unwrap();
     let mut client_config = quinn::ClientConfig::new(std::sync::Arc::new(quic_client_config));
