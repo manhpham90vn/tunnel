@@ -44,32 +44,18 @@ pub async fn handle_stream_relay(
     // TCP -> QUIC
     let tcp_to_quic = tokio::spawn(async move {
         tracing::info!("Starting relay TCP->QUIC for stream {}", stream_id_clone1);
-        let mut buf = [0u8; 8192];
-        let mut total = 0;
-        loop {
-            match tokio::io::AsyncReadExt::read(&mut tcp_read, &mut buf).await {
-                Ok(0) => break,
-                Ok(n) => {
-                    tracing::info!("TCP->QUIC [{}]: read {} bytes", stream_id_clone1, n);
-                    if let Err(e) =
-                        tokio::io::AsyncWriteExt::write_all(&mut quic_send, &buf[..n]).await
-                    {
-                        tracing::error!("TCP->QUIC [{}] write error: {}", stream_id_clone1, e);
-                        break;
-                    }
-                    total += n;
-                }
-                Err(e) => {
-                    tracing::error!("TCP->QUIC [{}] read error: {}", stream_id_clone1, e);
-                    break;
-                }
+        match tokio::io::copy(&mut tcp_read, &mut quic_send).await {
+            Ok(total) => {
+                tracing::info!(
+                    "Relay TCP->QUIC [{}] finished, {} bytes",
+                    stream_id_clone1,
+                    total
+                );
+            }
+            Err(e) => {
+                tracing::error!("TCP->QUIC [{}] error: {}", stream_id_clone1, e);
             }
         }
-        tracing::info!(
-            "Relay TCP->QUIC [{}] finished, {} bytes",
-            stream_id_clone1,
-            total
-        );
         let _ = quic_send.finish();
     });
 
@@ -77,32 +63,18 @@ pub async fn handle_stream_relay(
     // QUIC -> TCP
     let quic_to_tcp = tokio::spawn(async move {
         tracing::info!("Starting relay QUIC->TCP for stream {}", stream_id_clone2);
-        let mut buf = [0u8; 8192];
-        let mut total = 0;
-        loop {
-            match tokio::io::AsyncReadExt::read(&mut quic_recv, &mut buf).await {
-                Ok(0) => break,
-                Ok(n) => {
-                    tracing::info!("QUIC->TCP [{}]: read {} bytes", stream_id_clone2, n);
-                    if let Err(e) =
-                        tokio::io::AsyncWriteExt::write_all(&mut tcp_write, &buf[..n]).await
-                    {
-                        tracing::error!("QUIC->TCP [{}] write error: {}", stream_id_clone2, e);
-                        break;
-                    }
-                    total += n;
-                }
-                Err(e) => {
-                    tracing::error!("QUIC->TCP [{}] read error: {}", stream_id_clone2, e);
-                    break;
-                }
+        match tokio::io::copy(&mut quic_recv, &mut tcp_write).await {
+            Ok(total) => {
+                tracing::info!(
+                    "Relay QUIC->TCP [{}] finished, {} bytes",
+                    stream_id_clone2,
+                    total
+                );
+            }
+            Err(e) => {
+                tracing::error!("QUIC->TCP [{}] error: {}", stream_id_clone2, e);
             }
         }
-        tracing::info!(
-            "Relay QUIC->TCP [{}] finished, {} bytes",
-            stream_id_clone2,
-            total
-        );
         // Optionally shutdown TCP write half
     });
 

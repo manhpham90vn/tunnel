@@ -73,8 +73,8 @@ pub async fn run_agent_loop(state: Arc<AgentState>, app_handle: tauri::AppHandle
     let mut client_config = quinn::ClientConfig::new(std::sync::Arc::new(quic_client_config));
 
     let mut transport_config = quinn::TransportConfig::default();
-    transport_config.max_concurrent_bidi_streams(1024u32.into());
-    transport_config.max_concurrent_uni_streams(1024u32.into());
+    transport_config.max_concurrent_bidi_streams(4096u32.into());
+    transport_config.max_concurrent_uni_streams(4096u32.into());
     client_config.transport_config(std::sync::Arc::new(transport_config));
 
     endpoint.set_default_client_config(client_config);

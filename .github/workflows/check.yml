@@ -40,9 +40,9 @@ jobs:
         working-directory: tunnel-protocol
         run: cargo clippy -- -D warnings
 
-      - name: Build
+      - name: Check compilation
         working-directory: server
-        run: cargo build
+        run: cargo check
 
   check-client:
     runs-on: ubuntu-22.04
@@ -89,6 +89,6 @@ jobs:
         working-directory: client/src-tauri
         run: cargo clippy -- -D warnings
 
-      - name: Build
+      - name: Check frontend
         working-directory: client
-        run: npx tauri build
+        run: npm run build

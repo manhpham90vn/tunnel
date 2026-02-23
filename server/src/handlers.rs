@@ -130,57 +130,24 @@ pub async fn handle_connection(connection: quinn::Connection, state: AppState) {
                                             sid_clone,
                                             target_id_c
                                         );
-                                        let mut buf = [0u8; 8192];
-                                        let mut total = 0;
-                                        loop {
-                                            match tokio::io::AsyncReadExt::read(
-                                                &mut q_recv,
-                                                &mut buf,
-                                            )
-                                            .await
-                                            {
-                                                Ok(0) => break,
-                                                Ok(n) => {
-                                                    tracing::info!(
-                                                        "Proxy {} -> {}: read {} bytes",
-                                                        sid_clone,
-                                                        target_id_c,
-                                                        n
-                                                    );
-                                                    if let Err(e) =
-                                                        tokio::io::AsyncWriteExt::write_all(
-                                                            &mut t_send,
-                                                            &buf[..n],
-                                                        )
-                                                        .await
-                                                    {
-                                                        tracing::error!(
-                                                            "Proxy Error write {} -> {}: {}",
-                                                            sid_clone,
-                                                            target_id_c,
-                                                            e
-                                                        );
-                                                        break;
-                                                    }
-                                                    total += n;
-                                                }
-                                                Err(e) => {
-                                                    tracing::error!(
-                                                        "Proxy Error read {} -> {}: {}",
-                                                        sid_clone,
-                                                        target_id_c,
-                                                        e
-                                                    );
-                                                    break;
-                                                }
+                                        match tokio::io::copy(&mut q_recv, &mut t_send).await {
+                                            Ok(total) => {
+                                                tracing::info!(
+                                                    "Proxy {} -> {} finished, {} bytes",
+                                                    sid_clone,
+                                                    target_id_c,
+                                                    total
+                                                );
+                                            }
+                                            Err(e) => {
+                                                tracing::error!(
+                                                    "Proxy Error {} -> {}: {}",
+                                                    sid_clone,
+                                                    target_id_c,
+                                                    e
+                                                );
                                             }
                                         }
-                                        tracing::info!(
-                                            "Proxy {} -> {} finished, {} bytes",
-                                            sid_clone,
-                                            target_id_c,
-                                            total
-                                        );
                                         let _ = t_send.finish();
                                     });
                                     let sid_clone2 = sess_str.clone();
@@ -191,57 +158,24 @@ pub async fn handle_connection(connection: quinn::Connection, state: AppState) {
                                             target_id_clone,
                                             sid_clone2
                                         );
-                                        let mut buf = [0u8; 8192];
-                                        let mut total = 0;
-                                        loop {
-                                            match tokio::io::AsyncReadExt::read(
-                                                &mut t_recv,
-                                                &mut buf,
-                                            )
-                                            .await
-                                            {
-                                                Ok(0) => break,
-                                                Ok(n) => {
-                                                    tracing::info!(
-                                                        "Proxy {} -> {}: read {} bytes",
-                                                        target_id_clone,
-                                                        sid_clone2,
-                                                        n
-                                                    );
-                                                    if let Err(e) =
-                                                        tokio::io::AsyncWriteExt::write_all(
-                                                            &mut q_send,
-                                                            &buf[..n],
-                                                        )
-                                                        .await
-                                                    {
-                                                        tracing::error!(
-                                                            "Proxy Error write {} -> {}: {}",
-                                                            target_id_clone,
-                                                            sid_clone2,
-                                                            e
-                                                        );
-                                                        break;
-                                                    }
-                                                    total += n;
-                                                }
-                                                Err(e) => {
-                                                    tracing::error!(
-                                                        "Proxy Error read {} -> {}: {}",
-                                                        target_id_clone,
-                                                        sid_clone2,
-                                                        e
-                                                    );
-                                                    break;
-                                                }
+                                        match tokio::io::copy(&mut t_recv, &mut q_send).await {
+                                            Ok(total) => {
+                                                tracing::info!(
+                                                    "Proxy {} -> {} finished, {} bytes",
+                                                    target_id_clone,
+                                                    sid_clone2,
+                                                    total
+                                                );
+                                            }
+                                            Err(e) => {
+                                                tracing::error!(
+                                                    "Proxy Error {} -> {}: {}",
+                                                    target_id_clone,
+                                                    sid_clone2,
+                                                    e
+                                                );
                                             }
                                         }
-                                        tracing::info!(
-                                            "Proxy {} -> {} finished, {} bytes",
-                                            target_id_clone,
-                                            sid_clone2,
-                                            total
-                                        );
                                         let _ = q_send.finish();
                                     });
                                 } else {
