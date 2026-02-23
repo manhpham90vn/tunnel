@@ -13,10 +13,10 @@
 //! - [`relay`]     — Per-stream TCP ↔ WebSocket bidirectional relay
 
 mod agent;
-mod commands;
-mod protocol;
+pub mod cert;
+pub mod commands;
 mod relay;
-mod state;
+pub mod state;
 
 use state::AgentState;
 use std::sync::Arc;

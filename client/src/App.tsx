@@ -66,11 +66,11 @@ function App() {
       setConnected(info.connected);
       // Parse IP and port from the stored server URL
       try {
-        const url = new URL(info.server_url.replace('ws://', 'http://').replace('wss://', 'https://'));
-        setServerIp(url.hostname);
-        setServerPort(url.port || "7070");
+        const parts = info.server_url.split(':');
+        setServerIp(parts[0] || "127.0.0.1");
+        setServerPort(parts[1] || "7070");
       } catch {
-        // Keep defaults if URL can't be parsed
+        // Keep defaults if parsing fails
       }
     });
   }, []);
@@ -121,7 +121,7 @@ function App() {
 
   // ── Save server URL to backend ──
   const handleSaveServerUrl = async () => {
-    const url = `ws://${serverIp.trim()}:${serverPort.trim()}/ws`;
+    const url = `${serverIp.trim()}:${serverPort.trim()}`;
     try {
       await invoke("set_server_url", { url });
       setServerUrlSaved(true);

@@ -14,7 +14,7 @@ use tokio::sync::{mpsc, RwLock};
 use tokio::task::JoinHandle;
 use tracing::info;
 
-use crate::protocol::WsMessage;
+use tunnel_protocol::ControlMessage;
 
 // ─── Data Types ─────────────────────────────────────────────────
 
@@ -81,7 +81,7 @@ pub struct AgentTunnelInfo {
 }
 
 /// Default relay server URL. Used when no custom URL is set.
-pub const DEFAULT_SERVER_URL: &str = "ws://127.0.0.1:7070/ws";
+pub const DEFAULT_SERVER_URL: &str = "127.0.0.1:7070";
 
 // ─── Central Agent State ────────────────────────────────────────
 
@@ -94,16 +94,16 @@ pub struct AgentState {
     /// Empty string until the server responds with RegisterOk.
     pub agent_id: RwLock<String>,
 
-    /// The relay server WebSocket URL (e.g., "ws://1.2.3.4:7070/ws").
+    /// The relay server address (e.g., "1.2.3.4:7070").
     /// Can be changed at runtime from the UI.
     pub server_url: RwLock<String>,
 
     /// Whether we're currently connected to the relay server.
     pub connected: RwLock<bool>,
 
-    /// Channel to send outbound WebSocket messages to the server.
+    /// Channel to send outbound messages to the server over the control stream.
     /// `None` when not connected.
-    pub ws_tx: RwLock<Option<mpsc::UnboundedSender<WsMessage>>>,
+    pub ws_tx: RwLock<Option<mpsc::UnboundedSender<ControlMessage>>>,
 
     /// List of active tunnels (displayed in the UI).
     pub tunnels: RwLock<Vec<TunnelInfo>>,
@@ -127,6 +127,12 @@ pub struct AgentState {
     pub task_handles: RwLock<HashMap<String, Vec<JoinHandle<()>>>>,
 }
 
+impl Default for AgentState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AgentState {
     /// Creates a new `AgentState` with a freshly generated agent ID
     /// and all registries initialized to empty.
@@ -137,10 +143,10 @@ impl AgentState {
             connected: RwLock::new(false),
             ws_tx: RwLock::new(None),
             tunnels: RwLock::new(Vec::new()),
-            pending_connects: RwLock::new(HashMap::new()),
-            data_channels: RwLock::new(HashMap::new()),
-            agent_tunnels: RwLock::new(HashMap::new()),
-            task_handles: RwLock::new(HashMap::new()),
+            pending_connects: RwLock::new(HashMap::<String, PendingConnect>::new()),
+            data_channels: RwLock::new(HashMap::<String, mpsc::UnboundedSender<Vec<u8>>>::new()),
+            agent_tunnels: RwLock::new(HashMap::<String, AgentTunnelInfo>::new()),
+            task_handles: RwLock::new(HashMap::<String, Vec<JoinHandle<()>>>::new()),
         }
     }
 

@@ -4,11 +4,11 @@
 //! Each `#[tauri::command]` function can be called from JavaScript using
 //! `invoke("command_name", { args })`.
 
-use crate::protocol::WsMessage;
 use crate::state::{AgentState, AgentStatus, PendingConnect, TunnelInfo};
 use std::sync::Arc;
 use tauri::Emitter;
 use tracing::info;
+use tunnel_protocol::ControlMessage;
 use uuid::Uuid;
 
 /// Returns the current agent status (ID, connection state, server URL).
@@ -85,7 +85,7 @@ pub async fn connect_to_agent(
     }
 
     // Send the connect request to the relay server
-    tx.send(WsMessage::Connect {
+    tx.send(ControlMessage::Connect {
         target_id: target_id.clone(),
         remote_host: remote_host.clone(),
         remote_port,
@@ -128,7 +128,7 @@ pub async fn disconnect_tunnel(
     // Send close message to the server
     let ws_tx = state.ws_tx.read().await;
     if let Some(tx) = ws_tx.as_ref() {
-        let _ = tx.send(WsMessage::TunnelClose {
+        let _ = tx.send(ControlMessage::TunnelClose {
             session_id: session_id.clone(),
         });
     }

@@ -18,26 +18,22 @@
 //! - [`api`]      — REST API endpoints
 
 mod api;
+mod cert;
 mod handlers;
-mod protocol;
 mod state;
-
-use axum::{routing::get, Router};
-use std::net::SocketAddr;
-use tower_http::cors::CorsLayer;
-use tracing::info;
 
 use crate::state::AppState;
 
 /// Server entry point.
 ///
 /// Initializes logging, creates the shared state, configures routes,
-/// and starts listening for incoming connections on port 7070.
+/// and starts listening for incoming HTTP connections on TCP 7070
+/// and QUIC connections on UDP 7070.
 #[tokio::main]
 async fn main() {
-    // Initialize structured logging with env-filter support.
-    // Default log level is `info` for the tunnel_server crate.
-    // Override with the `RUST_LOG` environment variable.
+    // Install default crypto provider for rustls
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -45,20 +41,52 @@ async fn main() {
         )
         .init();
 
-    // Create the shared application state (agent/connection/session registries)
     let state = AppState::new();
 
-    // Build the Axum router with WebSocket and REST endpoints
-    let app = Router::new()
-        .route("/ws", get(handlers::ws_handler)) // WebSocket upgrade
-        .route("/api/agents", get(api::list_agents)) // REST: list agents
-        .layer(CorsLayer::permissive()) // Allow all CORS origins
-        .with_state(state);
+    // ── HTTP API (Axum) ──
+    let app = axum::Router::new()
+        .route("/api/agents", axum::routing::get(api::list_agents))
+        .layer(tower_http::cors::CorsLayer::permissive())
+        .with_state(state.clone());
 
-    // Bind to all interfaces on port 7070
-    let addr = SocketAddr::from(([0, 0, 0, 0], 7070));
-    info!("🚇 Tunnel Server listening on {}", addr);
+    let addr = std::net::SocketAddr::from(([0, 0, 0, 0], 7070));
+    let tcp_listener = tokio::net::TcpListener::bind(addr).await.unwrap();
 
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    tracing::info!("🚇 Tunnel Server (HTTP API) listening on TCP {}", addr);
+    tokio::spawn(async move {
+        axum::serve(tcp_listener, app).await.unwrap();
+    });
+
+    // ── QUIC Protocol (Quinn) ──
+    let (server_config, _cert) =
+        cert::generate_self_signed_cert().expect("Failed to generate TLS cert");
+    let mut transport_config = quinn::TransportConfig::default();
+    transport_config.max_concurrent_bidi_streams(1024u32.into());
+    transport_config.max_concurrent_uni_streams(1024u32.into());
+
+    let mut quinn_config = quinn::ServerConfig::with_crypto(std::sync::Arc::new(
+        quinn::crypto::rustls::QuicServerConfig::try_from(server_config)
+            .expect("Failed to create QUIC config"),
+    ));
+    quinn_config.transport_config(std::sync::Arc::new(transport_config));
+    let endpoint = quinn::Endpoint::server(quinn_config, addr).unwrap();
+
+    tracing::info!(
+        "🚇 Tunnel Server (QUIC) listening on UDP {}",
+        endpoint.local_addr().unwrap()
+    );
+
+    while let Some(incoming) = endpoint.accept().await {
+        let state_clone = state.clone();
+        tokio::spawn(async move {
+            match incoming.await {
+                Ok(connection) => {
+                    handlers::handle_connection(connection, state_clone).await;
+                }
+                Err(e) => {
+                    tracing::error!("Failed to complete QUIC connection: {}", e);
+                }
+            }
+        });
+    }
 }

@@ -8,17 +8,17 @@
 //! - Incoming message dispatch to the appropriate handler
 //! - Clean state reset on disconnect
 
-use crate::protocol::WsMessage;
+use crate::cert::SkipServerVerification;
 use crate::relay::handle_stream_relay;
 use crate::state::{AgentState, AgentTunnelInfo, TunnelInfo};
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use futures::{SinkExt, StreamExt};
+use quinn::Endpoint;
 use std::sync::Arc;
 use tauri::Emitter;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
 use tokio::sync::mpsc;
-use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{error, info, warn};
+use tunnel_protocol::ControlMessage;
 use uuid::Uuid;
 
 /// How long to wait before attempting to reconnect after a disconnect.
@@ -26,104 +26,217 @@ const RECONNECT_DELAY_SECS: u64 = 3;
 
 // ─── Main Connection Loop ───────────────────────────────────────
 
-/// Runs the agent's WebSocket connection loop forever.
-///
-/// This function never returns — it continuously connects to the relay
-/// server, handles messages, and reconnects on failure. It is spawned
-/// as a background task during Tauri app setup.
-///
-/// ## Connection Lifecycle
-/// 1. Connect to the server via WebSocket
-/// 2. Register this agent with its unique ID
-/// 3. Spawn outbound message sender and heartbeat tasks
-/// 4. Process incoming messages until disconnect
-/// 5. Clean up all state (channels, tunnels, tasks)
-/// 6. Wait `RECONNECT_DELAY_SECS` and go to step 1
 pub async fn run_agent_loop(state: Arc<AgentState>, app_handle: tauri::AppHandle) {
+    let mut endpoint = Endpoint::client("[::]:0".parse().unwrap()).unwrap();
+
+    let mut crypto = rustls::ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(SkipServerVerification::new())
+        .with_no_client_auth();
+    crypto.alpn_protocols = vec![b"tunnel".to_vec()];
+    let quic_client_config = quinn::crypto::rustls::QuicClientConfig::try_from(crypto).unwrap();
+    let mut client_config = quinn::ClientConfig::new(std::sync::Arc::new(quic_client_config));
+
+    let mut transport_config = quinn::TransportConfig::default();
+    transport_config.max_concurrent_bidi_streams(1024u32.into());
+    transport_config.max_concurrent_uni_streams(1024u32.into());
+    client_config.transport_config(std::sync::Arc::new(transport_config));
+
+    endpoint.set_default_client_config(client_config);
+
     loop {
-        // Read the server URL from state (may have been updated by the UI)
         let server_url = state.server_url.read().await.clone();
         info!("Connecting to server: {}", server_url);
         let _ = app_handle.emit("connection-status", false);
 
-        match connect_async(&server_url).await {
-            Ok((ws_stream, _)) => {
-                info!("Connected to server!");
-                *state.connected.write().await = true;
-                let _ = app_handle.emit("connection-status", true);
+        match server_url.parse() {
+            Ok(server_addr) => {
+                match endpoint.connect(server_addr, "localhost") {
+                    Ok(connecting) => {
+                        match connecting.await {
+                            Ok(connection) => {
+                                info!("Connected to server via QUIC!");
+                                *state.connected.write().await = true;
+                                let _ = app_handle.emit("connection-status", true);
 
-                // Split the WebSocket into read and write halves
-                let (ws_sink, mut ws_stream_rx) = ws_stream.split();
-                let ws_sink = Arc::new(tokio::sync::Mutex::new(ws_sink));
+                                // Open the primary bi-directional stream for ControlMessages
+                                match connection.open_bi().await {
+                                    Ok((mut control_send, mut control_recv)) => {
+                                        let (tx, mut rx) =
+                                            mpsc::unbounded_channel::<ControlMessage>();
+                                        *state.ws_tx.write().await = Some(tx.clone());
 
-                // Create the outbound message channel
-                let (tx, mut rx) = mpsc::unbounded_channel::<WsMessage>();
-                *state.ws_tx.write().await = Some(tx.clone());
+                                        // Request registration
+                                        let _ = tx.send(ControlMessage::Register);
 
-                // Request registration — the server will assign an Agent ID
-                let _ = tx.send(WsMessage::Register);
+                                        // ── Outbound Sender Task ──
+                                        let outbound = tokio::spawn(async move {
+                                            while let Some(msg) = rx.recv().await {
+                                                if let Ok(bytes) = msg.serialize() {
+                                                    let len = bytes.len() as u32;
+                                                    if control_send.write_u32_le(len).await.is_err()
+                                                    {
+                                                        break;
+                                                    }
+                                                    if control_send.write_all(&bytes).await.is_err()
+                                                    {
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        });
 
-                // ── Outbound Sender Task ──
-                // Drains the message queue, serializes each message to JSON,
-                // and sends it over the WebSocket.
-                let ws_sink_clone = ws_sink.clone();
-                let outbound = tokio::spawn(async move {
-                    while let Some(msg) = rx.recv().await {
-                        if let Ok(text) = serde_json::to_string(&msg) {
-                            let mut sink = ws_sink_clone.lock().await;
-                            if sink.send(Message::Text(text.into())).await.is_err() {
-                                break; // Connection lost
+                                        // ── Heartbeat Task ──
+                                        let tx_ping = tx.clone();
+                                        let heartbeat = tokio::spawn(async move {
+                                            loop {
+                                                tokio::time::sleep(
+                                                    tokio::time::Duration::from_secs(30),
+                                                )
+                                                .await;
+                                                if tx_ping.send(ControlMessage::Ping).is_err() {
+                                                    break;
+                                                }
+                                            }
+                                        });
+
+                                        // ── Stream Acceptance Loop ──
+                                        // The agent must accept incoming QUIC data streams from the server!
+                                        let connection_clone = connection.clone();
+                                        let state_clone = state.clone();
+                                        let tx_clone = tx.clone();
+                                        let inbound_streams = tokio::spawn(async move {
+                                            while let Ok((send, mut recv)) =
+                                                connection_clone.accept_bi().await
+                                            {
+                                                tracing::info!(
+                                                    "Agent accepted a new bi QUIC stream!"
+                                                );
+                                                let mut prefix = [0u8; 17];
+                                                if let Err(e) = recv.read_exact(&mut prefix).await {
+                                                    tracing::error!(
+                                                        "Agent failed to read prefix: {}",
+                                                        e
+                                                    );
+                                                    continue;
+                                                }
+                                                if prefix[0] != 0x0A {
+                                                    tracing::warn!(
+                                                        "Agent received non-data stream: {}",
+                                                        prefix[0]
+                                                    );
+                                                    continue; // Not a Data stream
+                                                }
+
+                                                let sess_bytes = &prefix[1..9];
+                                                let strm_bytes = &prefix[9..17];
+
+                                                // Strip trailing null bytes
+                                                let sess_str = String::from_utf8(
+                                                    sess_bytes
+                                                        .iter()
+                                                        .filter(|&&c| c != 0)
+                                                        .cloned()
+                                                        .collect(),
+                                                )
+                                                .unwrap_or_default();
+                                                let strm_str = String::from_utf8(
+                                                    strm_bytes
+                                                        .iter()
+                                                        .filter(|&&c| c != 0)
+                                                        .cloned()
+                                                        .collect(),
+                                                )
+                                                .unwrap_or_default();
+
+                                                let at = state_clone.agent_tunnels.read().await;
+                                                if let Some(info) = at.get(&sess_str).cloned() {
+                                                    drop(at); // Drop before spawning
+                                                    tracing::info!("Agent linking stream {} for session {} to {}:{}", strm_str, sess_str, info.remote_host, info.remote_port);
+                                                    let addr = format!(
+                                                        "{}:{}",
+                                                        info.remote_host, info.remote_port
+                                                    );
+                                                    let tx2 = tx_clone.clone();
+                                                    let st3 = state_clone.clone();
+
+                                                    tokio::spawn(async move {
+                                                        match tokio::net::TcpStream::connect(&addr)
+                                                            .await
+                                                        {
+                                                            Ok(tcp_stream) => {
+                                                                tracing::info!("Agent connected to local target {}", addr);
+                                                                handle_stream_relay(
+                                                                    tcp_stream,
+                                                                    sess_str.clone(),
+                                                                    strm_str.clone(),
+                                                                    send,
+                                                                    recv,
+                                                                    tx2,
+                                                                    st3,
+                                                                )
+                                                                .await;
+                                                            }
+                                                            Err(_) => {
+                                                                let _ = tx2.send(
+                                                                    ControlMessage::StreamClose {
+                                                                        session_id: sess_str,
+                                                                        stream_id: strm_str,
+                                                                    },
+                                                                );
+                                                            }
+                                                        }
+                                                    });
+                                                }
+                                            }
+                                        });
+
+                                        // ── Inbound Message Loop ──
+                                        while let Ok(l) = control_recv.read_u32_le().await {
+                                            let len = l as usize;
+
+                                            let mut buf = vec![0u8; len];
+                                            if control_recv.read_exact(&mut buf).await.is_err() {
+                                                break;
+                                            }
+
+                                            if let Ok(msg) = ControlMessage::deserialize(&buf) {
+                                                handle_server_message(
+                                                    &state,
+                                                    &tx,
+                                                    connection.clone(),
+                                                    &app_handle,
+                                                    msg,
+                                                )
+                                                .await;
+                                            }
+                                        }
+
+                                        // Clean disconnect
+                                        outbound.abort();
+                                        heartbeat.abort();
+                                        inbound_streams.abort();
+                                    }
+                                    Err(e) => error!("Failed to open control stream: {}", e),
+                                }
+
+                                *state.connected.write().await = false;
+                                *state.ws_tx.write().await = None;
+                                state.data_channels.write().await.clear();
+                                state.agent_tunnels.write().await.clear();
+                                state.abort_all_tasks().await;
+                                state.tunnels.write().await.clear();
+                                let _ = app_handle.emit("tunnels-updated", ());
+                                let _ = app_handle.emit("connection-status", false);
+                                warn!("Disconnected from server");
                             }
+                            Err(e) => error!("Connection failed: {}", e),
                         }
                     }
-                });
-
-                // ── Heartbeat Task ──
-                // Sends a Ping message every 30 seconds to keep the
-                // connection alive and detect stale connections.
-                let tx_ping = tx.clone();
-                let heartbeat = tokio::spawn(async move {
-                    loop {
-                        tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
-                        if tx_ping.send(WsMessage::Ping).is_err() {
-                            break; // Channel closed; connection lost
-                        }
-                    }
-                });
-
-                // ── Inbound Message Loop ──
-                // Processes incoming WebSocket frames. Only JSON text frames
-                // are handled; binary and ping frames are ignored.
-                while let Some(Ok(msg)) = ws_stream_rx.next().await {
-                    match msg {
-                        Message::Text(text) => {
-                            if let Ok(ws_msg) = serde_json::from_str::<WsMessage>(&text) {
-                                handle_server_message(&state, &tx, &app_handle, ws_msg).await;
-                            }
-                        }
-                        Message::Close(_) => break,
-                        _ => {}
-                    }
+                    Err(e) => error!("QUIC Endpoint connect failed: {}", e),
                 }
-
-                // ── Disconnect Cleanup ──
-                // Abort background tasks and reset all state to ensure
-                // a clean slate before reconnecting.
-                outbound.abort();
-                heartbeat.abort();
-                *state.connected.write().await = false;
-                *state.ws_tx.write().await = None;
-                state.data_channels.write().await.clear();
-                state.agent_tunnels.write().await.clear();
-                state.abort_all_tasks().await;
-                state.tunnels.write().await.clear();
-                let _ = app_handle.emit("tunnels-updated", ());
-                let _ = app_handle.emit("connection-status", false);
-                warn!("Disconnected from server");
             }
-            Err(e) => {
-                error!("Connection failed: {}", e);
-            }
+            Err(e) => error!("Invalid server address {}: {}", server_url, e),
         }
 
         // Wait before attempting to reconnect
@@ -142,13 +255,14 @@ pub async fn run_agent_loop(state: Arc<AgentState>, app_handle: tauri::AppHandle
 /// (initiating tunnels).
 async fn handle_server_message(
     state: &Arc<AgentState>,
-    tx: &mpsc::UnboundedSender<WsMessage>,
+    tx: &mpsc::UnboundedSender<ControlMessage>,
+    connection: quinn::Connection,
     app_handle: &tauri::AppHandle,
-    msg: WsMessage,
+    msg: ControlMessage,
 ) {
     match msg {
         // ── Registration Confirmed with Server-Assigned ID ──
-        WsMessage::RegisterOk { agent_id } => {
+        ControlMessage::RegisterOk { agent_id } => {
             info!("Registered as agent: {}", agent_id);
             // Store the server-assigned agent ID
             *state.agent_id.write().await = agent_id.clone();
@@ -158,7 +272,7 @@ async fn handle_server_message(
         // ── Agent Side: Incoming Tunnel Request ──
         // When another client wants to connect to us, the server asks
         // if we accept. We auto-accept all tunnel requests.
-        WsMessage::TunnelRequest {
+        ControlMessage::TunnelRequest {
             session_id,
             remote_host,
             remote_port,
@@ -169,7 +283,7 @@ async fn handle_server_message(
             );
 
             // Auto-accept the tunnel request
-            let _ = tx.send(WsMessage::TunnelAccept {
+            let _ = tx.send(ControlMessage::TunnelAccept {
                 session_id: session_id.clone(),
             });
 
@@ -204,7 +318,7 @@ async fn handle_server_message(
         // ── Controller Side: Tunnel is Ready ──
         // The agent accepted our tunnel request. Now we start a TCP
         // listener on the local port and relay incoming connections.
-        WsMessage::TunnelReady { session_id } => {
+        ControlMessage::TunnelReady { session_id } => {
             info!("Tunnel ready: {}", session_id);
 
             // Retrieve and remove the pending connection parameters
@@ -255,42 +369,62 @@ async fn handle_server_message(
                                             stream_id, peer, sid
                                         );
 
-                                        // Tell the agent to open a TCP connection to the target
-                                        let _ = tx_clone.send(WsMessage::StreamOpen {
-                                            session_id: sid.clone(),
-                                            stream_id: stream_id.clone(),
-                                        });
+                                        let _quic_send = match connection.open_bi().await {
+                                            Ok((tx, _rx)) => tx,
+                                            Err(e) => {
+                                                error!("Failed to open QUIC data stream: {}", e);
+                                                break;
+                                            }
+                                        };
 
-                                        // Pre-register the data channel BEFORE spawning the relay.
-                                        // This ensures incoming data from the agent is buffered
-                                        // while the relay task starts up, preventing a race condition.
-                                        let (data_tx, data_rx) =
-                                            mpsc::unbounded_channel::<Vec<u8>>();
-                                        let channel_key = format!("controller-{}", stream_id);
-                                        {
-                                            state_clone
-                                                .data_channels
-                                                .write()
-                                                .await
-                                                .insert(channel_key.clone(), data_tx);
-                                        }
-
-                                        // Spawn the bidirectional relay task for this stream
                                         let tx2 = tx_clone.clone();
                                         let st2 = state_clone.clone();
                                         let sid2 = sid.clone();
+
+                                        // A new QUIC stream means we need to open it and then send
+                                        // the `Data` protocol prefix so the server knows where to route it.
+                                        let conn2 = connection.clone();
                                         tokio::spawn(async move {
-                                            handle_stream_relay(
-                                                tcp_stream,
-                                                sid2,
-                                                stream_id,
-                                                channel_key,
-                                                "controller".to_string(),
-                                                tx2,
-                                                st2,
-                                                data_rx,
-                                            )
-                                            .await;
+                                            match conn2.open_bi().await {
+                                                Ok((mut q_send, q_recv)) => {
+                                                    // Tell the agent to open its TCP connection.
+                                                    let _ = tx2.send(ControlMessage::StreamOpen {
+                                                        session_id: sid2.clone(),
+                                                        stream_id: stream_id.clone(),
+                                                    });
+
+                                                    // Send the prefix: 0x0A + 8 bytes session + 8 bytes stream
+                                                    let mut prefix = vec![0x0A]; // TAG_DATA
+                                                    let mut sess_bytes = [0u8; 8];
+                                                    let s_bytes = sid2.as_bytes();
+                                                    sess_bytes[..s_bytes.len().min(8)]
+                                                        .copy_from_slice(
+                                                            &s_bytes[..s_bytes.len().min(8)],
+                                                        );
+
+                                                    let mut strm_bytes = [0u8; 8];
+                                                    let st_bytes = stream_id.as_bytes();
+                                                    strm_bytes[..st_bytes.len().min(8)]
+                                                        .copy_from_slice(
+                                                            &st_bytes[..st_bytes.len().min(8)],
+                                                        );
+
+                                                    prefix.extend_from_slice(&sess_bytes);
+                                                    prefix.extend_from_slice(&strm_bytes);
+                                                    if q_send.write_all(&prefix).await.is_err() {
+                                                        return;
+                                                    }
+
+                                                    handle_stream_relay(
+                                                        tcp_stream, sid2, stream_id, q_send,
+                                                        q_recv, tx2, st2,
+                                                    )
+                                                    .await;
+                                                }
+                                                Err(e) => {
+                                                    error!("Failed to open QUIC bi-stream: {}", e)
+                                                }
+                                            }
                                         });
                                     }
                                     Err(e) => {
@@ -321,85 +455,28 @@ async fn handle_server_message(
         }
 
         // ── Agent Side: Controller Opened a New Stream ──
-        // The controller has a new TCP connection. We need to open
-        // a TCP connection to the target service and start relaying.
-        WsMessage::StreamOpen {
+        // The controller has a new TCP connection. The Server will map the stream and just send it to us.
+        // We handle this exclusively in the incoming `accept_bi()` loop.
+        ControlMessage::StreamOpen {
             session_id,
             stream_id,
         } => {
-            info!("StreamOpen: session={}, stream={}", session_id, stream_id);
-
-            // Look up the target address for this tunnel
-            let tunnel_info = {
-                let at = state.agent_tunnels.read().await;
-                at.get(&session_id).cloned()
-            };
-
-            if let Some(info) = tunnel_info {
-                let addr = format!("{}:{}", info.remote_host, info.remote_port);
-                let tx_clone = tx.clone();
-                let state_clone = state.clone();
-
-                // Pre-register the agent data channel BEFORE connecting to the target.
-                // This ensures data from the controller is buffered while the TCP
-                // connection is being established.
-                let (data_tx, data_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-                let channel_key = format!("agent-{}", stream_id);
-                {
-                    state
-                        .data_channels
-                        .write()
-                        .await
-                        .insert(channel_key.clone(), data_tx);
-                }
-
-                // Spawn a task to connect to the target and start relaying
-                tokio::spawn(async move {
-                    match TcpStream::connect(&addr).await {
-                        Ok(tcp_stream) => {
-                            info!("Connected to {} for stream {}", addr, stream_id);
-                            handle_stream_relay(
-                                tcp_stream,
-                                session_id,
-                                stream_id,
-                                channel_key,
-                                "agent".to_string(),
-                                tx_clone,
-                                state_clone,
-                                data_rx,
-                            )
-                            .await;
-                        }
-                        Err(e) => {
-                            error!("Failed to connect {} for stream {}: {}", addr, stream_id, e);
-                            // Clean up the pre-registered channel
-                            state_clone.data_channels.write().await.remove(&channel_key);
-                            // Notify the controller that the stream failed
-                            let _ = tx_clone.send(WsMessage::StreamClose {
-                                session_id,
-                                stream_id,
-                            });
-                        }
-                    }
-                });
-            }
+            info!(
+                "StreamOpen: session={}, stream={} (Handled by inbound stream listener)",
+                session_id, stream_id
+            );
         }
 
         // ── Stream Closed by the Other Side ──
         // Remove the data channel so the relay task will stop naturally.
-        WsMessage::StreamClose {
+        ControlMessage::StreamClose {
             session_id: _,
-            stream_id,
-        } => {
-            let mut channels = state.data_channels.write().await;
-            // Remove both possible channel keys (we don't know our role here)
-            channels.remove(&format!("agent-{}", stream_id));
-            channels.remove(&format!("controller-{}", stream_id));
-        }
+            stream_id: _, // Keep stream_id in pattern for future use or remove completely if not needed
+        } => {}
 
         // ── Tunnel Closed ──
         // Clean up all resources associated with this tunnel session.
-        WsMessage::TunnelClose { session_id } => {
+        ControlMessage::TunnelClose { session_id } => {
             info!("Tunnel closed: {}", session_id);
             state.abort_session_tasks(&session_id).await;
             state.agent_tunnels.write().await.remove(&session_id);
@@ -408,39 +485,14 @@ async fn handle_server_message(
             let _ = app_handle.emit("tunnels-updated", ());
         }
 
-        // ── Data Relay ──
-        // Route incoming data to the correct stream's TCP handler
-        // by looking up the data channel and forwarding the bytes.
-        WsMessage::Data {
-            session_id: _,
-            stream_id,
-            role,
-            payload,
-        } => {
-            if let Ok(data) = BASE64.decode(&payload) {
-                let channels = state.data_channels.read().await;
-                // Data from "agent" → goes to controller's handler
-                // Data from "controller" → goes to agent's handler
-                let target_key = if role == "agent" {
-                    format!("controller-{}", stream_id)
-                } else {
-                    format!("agent-{}", stream_id)
-                };
-
-                if let Some(sender) = channels.get(&target_key) {
-                    let _ = sender.send(data);
-                }
-            }
-        }
-
         // ── Error from Server ──
-        WsMessage::Error { message } => {
+        ControlMessage::Error { message } => {
             error!("Server error: {}", message);
             let _ = app_handle.emit("server-error", &message);
         }
 
         // ── Heartbeat ──
-        WsMessage::Pong => {
+        ControlMessage::Pong => {
             // No action needed; confirms the connection is alive
         }
         _ => {}

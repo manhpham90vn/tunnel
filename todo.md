@@ -21,11 +21,11 @@
 
 ## Phase 1: Preparation
 
-- [ ] Study `quinn` API (connection, streams, bi-directional streams)
-- [ ] Add dependencies to `server/Cargo.toml` (`quinn`, `rustls`, `rcgen`)
-- [ ] Add dependencies to `client/src-tauri/Cargo.toml` (`quinn`, `rustls`, `rcgen`, `webpki`)
-- [ ] Create TLS certificate generation module (self-signed for dev, option to load cert for prod)
-- [ ] Remove unused dependencies (`tokio-tungstenite`, `base64`, `axum` ws feature)
+- [x] Study `quinn` API (connection, streams, bi-directional streams)
+- [x] Add dependencies to `server/Cargo.toml` (`quinn`, `rustls`, `rcgen`)
+- [x] Add dependencies to `client/src-tauri/Cargo.toml` (`quinn`, `rustls`, `rcgen`, `webpki`)
+- [x] Create TLS certificate generation module (self-signed for dev, option to load cert for prod)
+- [x] Remove unused dependencies (`tokio-tungstenite`, `base64`, `axum` ws feature)
 
 ---
 
@@ -45,8 +45,8 @@ Data messages (TCP relay):
 [1 byte: message_type = DATA][8 bytes: session_id][8 bytes: stream_id][raw payload bytes]
 ```
 
-- [ ] Define new `protocol.rs` — use bincode instead of JSON
-- [ ] Define message types:
+- [x] Define new `protocol.rs` — use bincode instead of JSON
+- [x] Define message types:
   - `0x01` Register
   - `0x02` RegisterOk
   - `0x03` Connect
@@ -60,7 +60,7 @@ Data messages (TCP relay):
   - `0x0B` Ping
   - `0x0C` Pong
   - `0x0D` Error
-- [ ] Create shared protocol crate (`tunnel-protocol`) for both server and client
+- [x] Create shared protocol crate (`tunnel-protocol`) for both server and client
 
 ---
 
@@ -68,23 +68,23 @@ Data messages (TCP relay):
 
 ### Files to modify/create:
 
-- [ ] **`server/src/main.rs`** — Replace Axum HTTP server with Quinn QUIC endpoint
+- [x] **`server/src/main.rs`** — Replace Axum HTTP server with Quinn QUIC endpoint
   - Create `quinn::Endpoint` instead of `tokio::net::TcpListener`
   - Bind UDP socket instead of TCP
   - Accept incoming QUIC connections
   - Keep HTTP API separate (Axum still runs alongside for `/api/agents`)
 
-- [ ] **`server/src/handlers.rs`** — Rewrite connection handler
+- [x] **`server/src/handlers.rs`** — Rewrite connection handler
   - `handle_connection(quinn::Connection)` instead of `handle_connection(WebSocket)`
   - Use `connection.accept_bi()` for control stream (first stream)
   - When `Data` messages arrive → open new QUIC bi-directional stream per TCP stream
   - Relay directly between QUIC streams (no data serialization needed)
 
-- [ ] **`server/src/state.rs`** — Update state types
+- [x] **`server/src/state.rs`** — Update state types
   - `ClientTx` → replace with `quinn::Connection` handle
   - Add per-connection stream tracking
 
-- [ ] **`server/src/protocol.rs`** — Binary protocol (see Phase 2)
+- [x] **`server/src/protocol.rs`** — Binary protocol (see Phase 2)
 
 ---
 
