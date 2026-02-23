@@ -47,19 +47,10 @@ pub async fn handle_connection(connection: quinn::Connection, state: AppState) {
 
     let agent_id: Arc<tokio::sync::Mutex<Option<String>>> = Arc::new(tokio::sync::Mutex::new(None));
 
-    // Wait, the send stream needs to safely write bytes. Bincode allows writing directly, but we can also
-    // just use ControlMessage::serialize().
+    // The outbound task responsible for sending control messages to the client.
+    // Control messages are framed with a 4-byte length prefix to ensure reliable delivery
+    // over the QUIC control stream. Format: `[4-byte len][tag][bincode_bytes]`.
     let outbound_task = tokio::spawn(async move {
-        // We need to write the length prefix if we want to frame properly over a reliable stream.
-        // Bincode doesn't add framing if we serialize to a Vec, it just serializes the enum.
-        // Wait, multiple messages sent consecutively on the same stream will need length prefixing,
-        // or we use a datagram, but QUIC streams are reliable byte streams.
-        // The protocol documentation doesn't specify length framing for control streams,
-        // but typically a byte stream needs it (e.g. `[4 byte length][byte payload]`).
-        // Actually, if we just use `bincode::serialize` it might be self-describing, but
-        // it's safer to read exact frames. Wait, let's keep it simple: bincode serialization
-        // is size-prefixed for variable length types natively, but reading stream of bincode is tricky.
-        // For Phase 3, we'll write `[4-byte len][tag][bincode_bytes]`.
         while let Some(msg) = rx.recv().await {
             match msg.serialize() {
                 Ok(bytes) => {

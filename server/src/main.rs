@@ -14,7 +14,7 @@
 //!
 //! - [`protocol`] — QUIC message types (binary bincode-serialized)
 //! - [`state`]    — Shared application state (agent/session registries)
-//! - [`handlers`] — WebSocket connection lifecycle and message dispatch
+//! - [`handlers`] — QUIC connection lifecycle and message dispatch
 //! - [`api`]      — REST API endpoints
 
 mod api;

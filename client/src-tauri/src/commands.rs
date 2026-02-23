@@ -54,7 +54,7 @@ pub async fn set_server_url(
 ///
 /// ## Flow
 /// 1. Stores the pending connection parameters
-/// 2. Sends a `Connect` message to the server via WebSocket
+/// 2. Sends a `Connect` message to the server via QUIC control stream
 /// 3. Adds a "connecting" tunnel entry to the UI
 /// 4. Returns a temporary session ID (updated when the tunnel is ready)
 #[tauri::command]

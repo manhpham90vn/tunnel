@@ -20,7 +20,9 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: server
+          workspaces: |
+            server
+            tunnel-protocol
 
       - name: Check formatting
         working-directory: server
@@ -28,6 +30,14 @@ jobs:
 
       - name: Run clippy
         working-directory: server
+        run: cargo clippy -- -D warnings
+
+      - name: Check formatting (protocol)
+        working-directory: tunnel-protocol
+        run: cargo fmt --check
+
+      - name: Run clippy (protocol)
+        working-directory: tunnel-protocol
         run: cargo clippy -- -D warnings
 
       - name: Build
@@ -46,7 +56,7 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: client/package-lock.json
+          cache-dependency-path: "client/package-lock.json"
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable

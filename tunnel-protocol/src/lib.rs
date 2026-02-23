@@ -110,16 +110,19 @@ impl ControlMessage {
     }
 }
 
-/// Helper for packing a raw DATA message.
+/// Packs a raw DATA message into the defined binary protocol format.
 ///
-/// Format: `[1 byte: 0x0A][8 bytes: session_id][8 bytes: stream_id][raw payload bytes]`
-/// Wait, `todo.md` says:
-/// `[1 byte: message_type = DATA][8 bytes: session_id][8 bytes: stream_id][raw payload bytes]`
-/// But our `session_id` and `stream_id` are `String` (short UUIDs or UUIDs).
-/// If they must be 8 bytes, we should use `u64` or fixed 8-byte arrays.
-/// The original protocol used `String` for `session_id` and `stream_id`.
-/// If we change them to exactly 8 bytes, we can use an 8-byte array.
-/// Let's stick strictly to `todo.md`: "8 bytes: session_id".
+/// The binary layout of a DATA message is constructed as follows:
+/// - `[1 byte]` : The message tag representing `DATA` (`0x0A`).
+/// - `[8 bytes]`: The `session_id`, uniquely identifying the active tunnel session.
+/// - `[8 bytes]`: The `stream_id`, uniquely identifying the TCP stream within the session.
+/// - `[n bytes]`: The actual data payload to be transmitted.
+///
+/// # Arguments
+///
+/// * `session_id` - An 8-byte array serving as the session identifier.
+/// * `stream_id` - An 8-byte array serving as the individual stream identifier.
+/// * `payload` - A byte slice containing the application data payload.
 pub fn pack_data_message(session_id: [u8; 8], stream_id: [u8; 8], payload: &[u8]) -> Vec<u8> {
     let mut buf = Vec::with_capacity(1 + 8 + 8 + payload.len());
     buf.push(TAG_DATA);

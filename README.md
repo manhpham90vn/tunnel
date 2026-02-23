@@ -5,13 +5,13 @@ Remote access between computers through a central relay server, similar to TeamV
 ## How It Works
 
 ```
-┌─────────────────┐         ┌─────────────────┐         ┌─────────────────┐
+┌─────────────────┐          ┌─────────────────┐          ┌─────────────────┐
 │   Agent (PC A)  │◄──QUIC──►│  Relay Server   │◄──QUIC──►│ Controller (B)  │
-│   Tauri App     │         │  Rust / Axum    │         │  Tauri App      │
-└────────┬────────┘         └─────────────────┘         └────────┬────────┘
-         │                                                       │
-    TCP to local                                            TCP listener
-    services                                                on local port
+│   Tauri App     │          │  Rust / Axum    │          │  Tauri App      │
+└────────┬────────┘          └─────────────────┘          └────────┬────────┘
+         │                                                         │
+    TCP to local                                              TCP listener
+    services                                                  on local port
 ```
 
 1. **Agent** registers with the relay server and receives a unique Agent ID (e.g., `A3F8-B2C1`)
@@ -92,7 +92,7 @@ sudo dpkg -r tunnel-server
 
 ### 1. Set Up the Server
 
-Install the relay server on a machine with a public IP. Ensure port **7070** is open in the firewall.
+Install the relay server on a machine with a public IP. Ensure both **TCP port 7070** (for the REST API) and **UDP port 7070** (for the QUIC protocol) are open in your firewall.
 
 ### 2. Connect the Agent
 
@@ -108,6 +108,14 @@ Install the relay server on a machine with a public IP. Ensure port **7070** is 
 4. Set **Local Port** (the port on your machine to access through, e.g., `2222`)
 5. Click **Connect**
 6. Access the remote service via `localhost:<local_port>`
+
+### Custom CA Certificates (Production)
+
+To connect securely in a production environment, you can instruct the client to verify the Relay Server's certificate against a custom CA. Set the `TUNNEL_CA_CERT` environment variable to the path of your PEM-encoded CA certificate file before starting the Tunnel Agent.
+
+```bash
+export TUNNEL_CA_CERT=/path/to/ca.pem
+```
 
 ### Example: SSH
 

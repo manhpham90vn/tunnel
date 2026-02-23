@@ -10,8 +10,8 @@
 //! TCP App ←──TCP──→ [Relay Task] ←──QUIC Data Stream──→ Server ←──→ Other Side
 //! ```
 //!
-//! The relay task uses `tokio::io::copy_bidirectional` natively
-//! between the TCP socket and the QUIC stream natively, without encoding.
+//! The relay task manually copies data back and forth
+//! between the TCP socket and the QUIC stream.
 
 use crate::state::AgentState;
 use quinn::{RecvStream, SendStream};

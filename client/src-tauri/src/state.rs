@@ -157,7 +157,7 @@ impl AgentState {
     }
 
     /// Aborts ALL spawned async tasks across all sessions.
-    /// Called on WebSocket disconnect to ensure a clean slate
+    /// Called on QUIC disconnect to ensure a clean slate
     /// before reconnecting.
     pub async fn abort_all_tasks(&self) {
         let mut handles = self.task_handles.write().await;
