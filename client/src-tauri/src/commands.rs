@@ -66,9 +66,9 @@ pub async fn connect_to_agent(
     state: tauri::State<'_, Arc<AgentState>>,
     app_handle: tauri::AppHandle,
 ) -> Result<String, String> {
-    // Get the WebSocket sender (fails if not connected)
-    let ws_tx = state.ws_tx.read().await;
-    let tx = ws_tx.as_ref().ok_or("Not connected to server")?.clone();
+    // Get the control sender (fails if not connected)
+    let ctrl_tx = state.ctrl_tx.read().await;
+    let tx = ctrl_tx.as_ref().ok_or("Not connected to server")?.clone();
 
     // Store the pending connection info so we can use it when
     // the server responds with TunnelReady
@@ -126,8 +126,8 @@ pub async fn disconnect_tunnel(
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
     // Send close message to the server
-    let ws_tx = state.ws_tx.read().await;
-    if let Some(tx) = ws_tx.as_ref() {
+    let ctrl_tx = state.ctrl_tx.read().await;
+    if let Some(tx) = ctrl_tx.as_ref() {
         let _ = tx.send(ControlMessage::TunnelClose {
             session_id: session_id.clone(),
         });

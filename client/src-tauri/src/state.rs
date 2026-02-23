@@ -103,7 +103,7 @@ pub struct AgentState {
 
     /// Channel to send outbound messages to the server over the control stream.
     /// `None` when not connected.
-    pub ws_tx: RwLock<Option<mpsc::UnboundedSender<ControlMessage>>>,
+    pub ctrl_tx: RwLock<Option<mpsc::UnboundedSender<ControlMessage>>>,
 
     /// List of active tunnels (displayed in the UI).
     pub tunnels: RwLock<Vec<TunnelInfo>>,
@@ -111,11 +111,6 @@ pub struct AgentState {
     /// Pending outgoing tunnel connections, keyed by target agent ID.
     /// Removed once the tunnel is established.
     pub pending_connects: RwLock<HashMap<String, PendingConnect>>,
-
-    /// Per-stream data channels for TCP ↔ WebSocket relay.
-    /// Key format: "{role}-{stream_id}" (e.g., "controller-abc12345").
-    /// The sender pushes decoded TCP data to the corresponding relay task.
-    pub data_channels: RwLock<HashMap<String, mpsc::UnboundedSender<Vec<u8>>>>,
 
     /// Agent-side tunnel metadata: session_id → target address.
     /// Used to know where to connect when a StreamOpen arrives.
@@ -141,10 +136,9 @@ impl AgentState {
             agent_id: RwLock::new(String::new()),
             server_url: RwLock::new(DEFAULT_SERVER_URL.to_string()),
             connected: RwLock::new(false),
-            ws_tx: RwLock::new(None),
+            ctrl_tx: RwLock::new(None),
             tunnels: RwLock::new(Vec::new()),
             pending_connects: RwLock::new(HashMap::<String, PendingConnect>::new()),
-            data_channels: RwLock::new(HashMap::<String, mpsc::UnboundedSender<Vec<u8>>>::new()),
             agent_tunnels: RwLock::new(HashMap::<String, AgentTunnelInfo>::new()),
             task_handles: RwLock::new(HashMap::<String, Vec<JoinHandle<()>>>::new()),
         }

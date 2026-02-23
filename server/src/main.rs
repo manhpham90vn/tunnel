@@ -1,18 +1,18 @@
 //! # Tunnel Relay Server
 //!
-//! A WebSocket-based relay server that enables TCP port forwarding between
+//! A QUIC-based relay server that enables TCP port forwarding between
 //! remote machines. It acts as a central hub connecting **agents** (machines
 //! exposing services) with **controllers** (machines requesting access).
 //!
 //! ## Architecture
 //!
 //! ```text
-//! Controller ──WS──► Relay Server ──WS──► Agent ──TCP──► Local Service
+//! Controller ──QUIC──► Relay Server ──QUIC──► Agent ──TCP──► Local Service
 //! ```
 //!
 //! ## Modules
 //!
-//! - [`protocol`] — WebSocket message types (JSON-serialized)
+//! - [`protocol`] — QUIC message types (binary bincode-serialized)
 //! - [`state`]    — Shared application state (agent/session registries)
 //! - [`handlers`] — WebSocket connection lifecycle and message dispatch
 //! - [`api`]      — REST API endpoints

@@ -1,20 +1,17 @@
-//! # TCP ↔ WebSocket Stream Relay
+//! # TCP ↔ QUIC Stream Relay
 //!
 //! Handles the bidirectional relay of data between a local TCP connection
-//! and a WebSocket tunnel. Each TCP connection within a tunnel session
-//! is represented as a "stream" with its own `stream_id`.
+//! and a QUIC tunnel stream. Each TCP connection within a tunnel session
+//! is represented as a stream with its own `stream_id`.
 //!
 //! ## Data Flow
 //!
 //! ```text
-//! TCP App ←──TCP──→ [Relay Task] ←──WS (base64 JSON)──→ Server ←──→ Other Side
+//! TCP App ←──TCP──→ [Relay Task] ←──QUIC Data Stream──→ Server ←──→ Other Side
 //! ```
 //!
-//! The relay task has two concurrent sub-tasks:
-//! 1. **TCP → WebSocket**: Reads bytes from TCP, base64-encodes them,
-//!    and sends them as `Data` messages over WebSocket.
-//! 2. **WebSocket → TCP**: Receives decoded bytes from a data channel
-//!    and writes them to the TCP socket.
+//! The relay task uses `tokio::io::copy_bidirectional` natively
+//! between the TCP socket and the QUIC stream natively, without encoding.
 
 use crate::state::AgentState;
 use quinn::{RecvStream, SendStream};
@@ -30,7 +27,7 @@ pub async fn handle_stream_relay(
     stream_id: String,
     mut quic_send: SendStream,
     mut quic_recv: RecvStream,
-    ws_tx: mpsc::UnboundedSender<ControlMessage>,
+    ctrl_tx: mpsc::UnboundedSender<ControlMessage>,
     _state: Arc<AgentState>,
 ) {
     // We use tokio::io::copy_bidirectional to easily pipe data
@@ -113,7 +110,7 @@ pub async fn handle_stream_relay(
     let _ = tokio::join!(tcp_to_quic, quic_to_tcp);
 
     // Notify the other side that this stream is closed
-    let _ = ws_tx.send(ControlMessage::StreamClose {
+    let _ = ctrl_tx.send(ControlMessage::StreamClose {
         session_id,
         stream_id,
     });

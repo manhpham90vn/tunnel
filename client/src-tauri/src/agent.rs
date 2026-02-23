@@ -1,6 +1,4 @@
-//! # Agent WebSocket Connection Loop
-//!
-//! Manages the persistent WebSocket connection between the client and
+//! Manages the persistent QUIC connection between the client and
 //! the relay server. Handles:
 //! - Connection establishment and auto-reconnect on failure
 //! - Agent registration on connect
@@ -29,10 +27,44 @@ const RECONNECT_DELAY_SECS: u64 = 3;
 pub async fn run_agent_loop(state: Arc<AgentState>, app_handle: tauri::AppHandle) {
     let mut endpoint = Endpoint::client("[::]:0".parse().unwrap()).unwrap();
 
-    let mut crypto = rustls::ClientConfig::builder()
-        .dangerous()
-        .with_custom_certificate_verifier(SkipServerVerification::new())
-        .with_no_client_auth();
+    // Build the TLS configuration.
+    // By default for dev mode, we skip server verification.
+    // In prod, if the user specifies a custom CA via environment variable
+    // TUNNEL_CA_CERT, we load it and verify against it.
+    let ca_path = std::env::var("TUNNEL_CA_CERT").ok();
+    let mut use_custom_ca = false;
+    let mut roots = rustls::RootCertStore::empty();
+    
+    if let Some(path) = &ca_path {
+        if let Ok(cert_bytes) = std::fs::read(path) {
+            let certs = rustls_pemfile::certs(&mut &cert_bytes[..])
+                .filter_map(Result::ok)
+                .collect::<Vec<_>>();
+            
+            if !certs.is_empty() {
+                let (added, ignored) = roots.add_parsable_certificates(certs);
+                if added > 0 {
+                     use_custom_ca = true;
+                     info!("Loaded {} custom CA certificate(s) from {} (ignored: {})", added, path, ignored);
+                }
+            }
+        } else {
+             error!("Failed to read custom CA certificate at {}", path);
+        }
+    }
+    
+    let mut crypto = if use_custom_ca {
+        rustls::ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth()
+    } else {
+        info!("No custom CA provided, skipping server verification (dev mode)");
+        rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(SkipServerVerification::new())
+            .with_no_client_auth()
+    };
+    
     crypto.alpn_protocols = vec![b"tunnel".to_vec()];
     let quic_client_config = quinn::crypto::rustls::QuicClientConfig::try_from(crypto).unwrap();
     let mut client_config = quinn::ClientConfig::new(std::sync::Arc::new(quic_client_config));
@@ -64,7 +96,7 @@ pub async fn run_agent_loop(state: Arc<AgentState>, app_handle: tauri::AppHandle
                                     Ok((mut control_send, mut control_recv)) => {
                                         let (tx, mut rx) =
                                             mpsc::unbounded_channel::<ControlMessage>();
-                                        *state.ws_tx.write().await = Some(tx.clone());
+                                        *state.ctrl_tx.write().await = Some(tx.clone());
 
                                         // Request registration
                                         let _ = tx.send(ControlMessage::Register);
@@ -221,8 +253,7 @@ pub async fn run_agent_loop(state: Arc<AgentState>, app_handle: tauri::AppHandle
                                 }
 
                                 *state.connected.write().await = false;
-                                *state.ws_tx.write().await = None;
-                                state.data_channels.write().await.clear();
+                                *state.ctrl_tx.write().await = None;
                                 state.agent_tunnels.write().await.clear();
                                 state.abort_all_tasks().await;
                                 state.tunnels.write().await.clear();
@@ -247,7 +278,7 @@ pub async fn run_agent_loop(state: Arc<AgentState>, app_handle: tauri::AppHandle
 
 // ─── Server Message Handler ─────────────────────────────────────
 
-/// Handles a single incoming WebSocket message from the relay server.
+/// Handles a single incoming ControlMessage from the relay server.
 ///
 /// This is the central dispatch function for all server messages.
 /// Each message type triggers different behavior depending on whether

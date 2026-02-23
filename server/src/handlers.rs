@@ -1,3 +1,16 @@
+//! # Connection Handlers
+//!
+//! Manages the lifecycle of individual QUIC connections connecting to the relay.
+//! Each connection represents a single client (either an Agent or a Controller).
+//!
+//! ## Responsibilities
+//!
+//! 1. Open the primary bi-directional stream for control messages.
+//! 2. Handle initial registration to receive an `agent_id`.
+//! 3. Process incoming `ControlMessage` signals (Connect, TunnelRequest, etc.).
+//! 4. Clean up active tunnels and notify peers upon disconnection.
+//! 5. Handle incoming QUIC streams for data relay natively.
+
 use crate::state::{generate_agent_id, AgentInfo, AppState, ConnectionInfo, TunnelSession};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -7,7 +20,9 @@ use uuid::Uuid;
 
 // ─── Connection Lifecycle ───────────────────────────────────────
 
-/// Manages the full lifecycle of a single QUIC connection.
+/// Upgrades an incoming QUIC connection and enters the main event loop.
+///
+/// This function spans a new concurrency task for each client.
 pub async fn handle_connection(connection: quinn::Connection, state: AppState) {
     let conn_id = Uuid::new_v4().to_string();
     info!("New QUIC connection: {}", conn_id);

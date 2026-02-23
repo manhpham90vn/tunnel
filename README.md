@@ -6,7 +6,7 @@ Remote access between computers through a central relay server, similar to TeamV
 
 ```
 ┌─────────────────┐         ┌─────────────────┐         ┌─────────────────┐
-│   Agent (PC A)  │◄──WS───►│  Relay Server   │◄──WS───►│ Controller (B)  │
+│   Agent (PC A)  │◄──QUIC──►│  Relay Server   │◄──QUIC──►│ Controller (B)  │
 │   Tauri App     │         │  Rust / Axum    │         │  Tauri App      │
 └────────┬────────┘         └─────────────────┘         └────────┬────────┘
          │                                                       │
@@ -16,7 +16,7 @@ Remote access between computers through a central relay server, similar to TeamV
 
 1. **Agent** registers with the relay server and receives a unique Agent ID (e.g., `A3F8-B2C1`)
 2. **Controller** enters the Agent ID, specifies target and local ports → creates a tunnel
-3. Data is relayed: `Controller local port` ↔ `WebSocket` ↔ `Agent target service`
+3. Data is relayed: `Controller local port` ↔ `QUIC Stream` ↔ `Agent target service`
 4. Agent auto-reconnects every 3 seconds if disconnected, with 30-second heartbeat keep-alive
 
 ---
@@ -127,10 +127,9 @@ ssh -p 2222 user@localhost
 
 ## Server API
 
-| Endpoint      | Method | Description                                |
-| ------------- | ------ | ------------------------------------------ |
-| `/ws`         | GET    | WebSocket upgrade (agents and controllers) |
-| `/api/agents` | GET    | List connected agents (JSON array)         |
+| Endpoint      | Method | Description                        |
+| ------------- | ------ | ---------------------------------- |
+| `/api/agents` | GET    | List connected agents (JSON array) |
 
 ---
 
@@ -145,7 +144,7 @@ ssh -p 2222 user@localhost
 ### Run Locally
 
 ```bash
-# Start the relay server (listens on 0.0.0.0:7070)
+# Start the relay server (listens on HTTP 0.0.0.0:7070 and UDP 0.0.0.0:7070)
 cd server && cargo run
 
 # Start the client in dev mode
@@ -176,12 +175,12 @@ cd client/src-tauri && cargo fmt --check && cargo clippy -- -D warnings
 
 ## Tech Stack
 
-| Component           | Technology                   |
-| ------------------- | ---------------------------- |
-| **Server**          | Rust, Axum, Tokio, WebSocket |
-| **Client Backend**  | Rust, Tauri v2, Tokio        |
-| **Client Frontend** | React, TypeScript, Vite      |
-| **Protocol**        | WebSocket + JSON + base64    |
+| Component           | Technology                      |
+| ------------------- | ------------------------------- |
+| **Server**          | Rust, Axum, Tokio, Quinn (QUIC) |
+| **Client Backend**  | Rust, Tauri v2, Tokio, Quinn    |
+| **Client Frontend** | React, TypeScript, Vite         |
+| **Protocol**        | QUIC + bincode binary           |
 
 ## License
 
