@@ -1,6 +1,6 @@
 [package]
 name = "tunnel-server"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 description = "Tunnel relay server for secure remote access"
 license = "MIT"
@@ -18,7 +18,7 @@ systemd-units = { unit-name = "tunnel-server", unit-scripts = ".", enable = true
 
 
 [dependencies]
-axum = { version = "0.8", features = ["ws"] }
+axum = "0.8"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -28,3 +28,7 @@ dashmap = "6"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tower-http = { version = "0.6", features = ["cors"] }
+quinn = "0.11"
+rustls = "0.23"
+rcgen = "0.13"
+tunnel-protocol = { path = "../tunnel-protocol" }

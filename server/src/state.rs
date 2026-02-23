@@ -6,17 +6,17 @@
 //! - **Session registry**: maps session IDs to tunnel session metadata
 //!
 //! All registries use [`DashMap`] for lock-free concurrent access,
-//! since multiple WebSocket connections are handled concurrently.
+//! since multiple QUIC connections are handled concurrently.
 
-use crate::protocol::WsMessage;
 use dashmap::DashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tunnel_protocol::ControlMessage;
 use uuid::Uuid;
 
 /// Type alias for the unbounded sender used to push messages to a client's
-/// outbound WebSocket queue. Each connected client gets one of these.
-pub type ClientTx = mpsc::UnboundedSender<WsMessage>;
+/// outbound QUIC control stream. Each connected client gets one of these.
+pub type ClientTx = mpsc::UnboundedSender<ControlMessage>;
 
 /// Generates a short, human-readable agent ID from a UUID.
 ///
@@ -35,8 +35,15 @@ pub fn generate_agent_id() -> String {
 /// Information stored for each registered agent.
 #[derive(Debug, Clone)]
 pub struct AgentInfo {
-    /// Channel to send messages to this agent's WebSocket connection.
+    /// Channel to send messages to this agent's QUIC connection.
     pub tx: ClientTx,
+    pub conn_id: String,
+}
+
+#[derive(Clone)]
+pub struct ConnectionInfo {
+    pub tx: ClientTx,
+    pub conn: quinn::Connection,
 }
 
 /// Metadata for an active tunnel session between a controller and an agent.
@@ -62,15 +69,15 @@ pub struct TunnelSession {
 /// Shared application state, cloned and passed to each request handler.
 ///
 /// Uses `Arc<DashMap<...>>` for thread-safe, lock-free concurrent access
-/// across all WebSocket handler tasks.
+/// across all QUIC handler tasks.
 #[derive(Clone)]
 pub struct AppState {
     /// Registry of currently connected agents, keyed by agent ID.
     pub agents: Arc<DashMap<String, AgentInfo>>,
 
-    /// Registry of all active WebSocket connections, keyed by connection ID.
+    /// Registry of all active QUIC connections, keyed by connection ID.
     /// This includes both agents and controllers.
-    pub connections: Arc<DashMap<String, ClientTx>>,
+    pub connections: Arc<DashMap<String, ConnectionInfo>>,
 
     /// Registry of active tunnel sessions, keyed by session ID.
     pub sessions: Arc<DashMap<String, TunnelSession>>,

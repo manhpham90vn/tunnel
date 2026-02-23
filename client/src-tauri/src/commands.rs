@@ -4,11 +4,11 @@
 //! Each `#[tauri::command]` function can be called from JavaScript using
 //! `invoke("command_name", { args })`.
 
-use crate::protocol::WsMessage;
 use crate::state::{AgentState, AgentStatus, PendingConnect, TunnelInfo};
 use std::sync::Arc;
 use tauri::Emitter;
 use tracing::info;
+use tunnel_protocol::ControlMessage;
 use uuid::Uuid;
 
 /// Returns the current agent status (ID, connection state, server URL).
@@ -54,7 +54,7 @@ pub async fn set_server_url(
 ///
 /// ## Flow
 /// 1. Stores the pending connection parameters
-/// 2. Sends a `Connect` message to the server via WebSocket
+/// 2. Sends a `Connect` message to the server via QUIC control stream
 /// 3. Adds a "connecting" tunnel entry to the UI
 /// 4. Returns a temporary session ID (updated when the tunnel is ready)
 #[tauri::command]
@@ -66,9 +66,9 @@ pub async fn connect_to_agent(
     state: tauri::State<'_, Arc<AgentState>>,
     app_handle: tauri::AppHandle,
 ) -> Result<String, String> {
-    // Get the WebSocket sender (fails if not connected)
-    let ws_tx = state.ws_tx.read().await;
-    let tx = ws_tx.as_ref().ok_or("Not connected to server")?.clone();
+    // Get the control sender (fails if not connected)
+    let ctrl_tx = state.ctrl_tx.read().await;
+    let tx = ctrl_tx.as_ref().ok_or("Not connected to server")?.clone();
 
     // Store the pending connection info so we can use it when
     // the server responds with TunnelReady
@@ -85,7 +85,7 @@ pub async fn connect_to_agent(
     }
 
     // Send the connect request to the relay server
-    tx.send(WsMessage::Connect {
+    tx.send(ControlMessage::Connect {
         target_id: target_id.clone(),
         remote_host: remote_host.clone(),
         remote_port,
@@ -126,9 +126,9 @@ pub async fn disconnect_tunnel(
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
     // Send close message to the server
-    let ws_tx = state.ws_tx.read().await;
-    if let Some(tx) = ws_tx.as_ref() {
-        let _ = tx.send(WsMessage::TunnelClose {
+    let ctrl_tx = state.ctrl_tx.read().await;
+    if let Some(tx) = ctrl_tx.as_ref() {
+        let _ = tx.send(ControlMessage::TunnelClose {
             session_id: session_id.clone(),
         });
     }

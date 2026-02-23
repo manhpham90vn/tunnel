@@ -1,121 +1,306 @@
-//! # WebSocket Handlers
+//! # Connection Handlers
 //!
-//! Contains the core WebSocket logic for the relay server:
-//! - Upgrading HTTP connections to WebSocket
-//! - Managing the lifecycle of each connection (inbound/outbound tasks, cleanup)
-//! - Dispatching incoming messages to the appropriate handler
-//! - Relaying data between tunnel endpoints
+//! Manages the lifecycle of individual QUIC connections connecting to the relay.
+//! Each connection represents a single client (either an Agent or a Controller).
+//!
+//! ## Responsibilities
+//!
+//! 1. Open the primary bi-directional stream for control messages.
+//! 2. Handle initial registration to receive an `agent_id`.
+//! 3. Process incoming `ControlMessage` signals (Connect, TunnelRequest, etc.).
+//! 4. Clean up active tunnels and notify peers upon disconnection.
+//! 5. Handle incoming QUIC streams for data relay natively.
 
-use crate::protocol::WsMessage;
-use crate::state::{generate_agent_id, AgentInfo, AppState, TunnelSession};
-use axum::{
-    extract::{
-        ws::{Message, WebSocket},
-        State, WebSocketUpgrade,
-    },
-    response::IntoResponse,
-};
-use futures::{SinkExt, StreamExt};
+use crate::state::{generate_agent_id, AgentInfo, AppState, ConnectionInfo, TunnelSession};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{error, info};
+use tunnel_protocol::ControlMessage;
 use uuid::Uuid;
-
-// ─── WebSocket Upgrade Endpoint ─────────────────────────────────
-
-/// `GET /ws` — Upgrades the HTTP connection to a WebSocket connection.
-///
-/// This is the entry point for all WebSocket clients (both agents and
-/// controllers). After the upgrade, the connection is handled by
-/// [`handle_connection`].
-pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_connection(socket, state))
-}
 
 // ─── Connection Lifecycle ───────────────────────────────────────
 
-/// Manages the full lifecycle of a single WebSocket connection.
+/// Upgrades an incoming QUIC connection and enters the main event loop.
 ///
-/// ## Flow:
-/// 1. Assign a unique connection ID
-/// 2. Split the socket into a sink (outbound) and stream (inbound)
-/// 3. Spawn an outbound task that serializes and sends queued messages
-/// 4. Process incoming messages on the current task
-/// 5. On disconnect: clean up connection, agent registry, and any sessions
-async fn handle_connection(socket: WebSocket, state: AppState) {
-    // Generate a unique ID for this connection (used internally for routing)
+/// This function spans a new concurrency task for each client.
+pub async fn handle_connection(connection: quinn::Connection, state: AppState) {
     let conn_id = Uuid::new_v4().to_string();
-    info!("New connection: {}", conn_id);
+    info!("New QUIC connection: {}", conn_id);
 
-    // Split the WebSocket into separate read/write halves
-    let (ws_sink, mut ws_stream) = socket.split();
+    // Accept the first bi-directional stream as the control stream.
+    let (mut send, mut recv) = match connection.accept_bi().await {
+        Ok(s) => s,
+        Err(e) => {
+            error!("Failed to accept control stream: {}", e);
+            return;
+        }
+    };
 
-    // Create an unbounded channel for queueing outbound messages.
-    // Any part of the server can send messages to this client via `tx`.
-    let (tx, mut rx) = mpsc::unbounded_channel::<WsMessage>();
+    let (tx, mut rx) = mpsc::unbounded_channel::<ControlMessage>();
+    state.connections.insert(
+        conn_id.clone(),
+        ConnectionInfo {
+            tx: tx.clone(),
+            conn: connection.clone(),
+        },
+    );
 
-    // Register this connection in the global connection registry
-    state.connections.insert(conn_id.clone(), tx.clone());
-
-    // Track the agent ID if this connection registers as an agent.
-    // Protected by a Mutex because it's shared between the inbound
-    // processing loop and the cleanup phase.
     let agent_id: Arc<tokio::sync::Mutex<Option<String>>> = Arc::new(tokio::sync::Mutex::new(None));
 
-    // ── Outbound Task ──
-    // Spawns a separate task that drains the message queue and sends
-    // each message as a JSON text frame over the WebSocket.
-    let ws_sink = Arc::new(tokio::sync::Mutex::new(ws_sink));
-    let ws_sink_clone = ws_sink.clone();
+    // The outbound task responsible for sending control messages to the client.
+    // Control messages are framed with a 4-byte length prefix to ensure reliable delivery
+    // over the QUIC control stream. Format: `[4-byte len][tag][bincode_bytes]`.
     let outbound_task = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
-            let text = match serde_json::to_string(&msg) {
-                Ok(t) => t,
+            match msg.serialize() {
+                Ok(bytes) => {
+                    let len = (bytes.len() as u32).to_le_bytes();
+                    if send.write_all(&len).await.is_err() {
+                        break;
+                    }
+                    if send.write_all(&bytes).await.is_err() {
+                        break;
+                    }
+                }
                 Err(e) => {
                     error!("Serialize error: {}", e);
-                    continue;
                 }
-            };
-            let mut sink = ws_sink_clone.lock().await;
-            if sink.send(Message::Text(text.into())).await.is_err() {
-                break; // WebSocket closed; stop sending
             }
         }
     });
 
-    // ── Inbound Loop ──
-    // Processes incoming WebSocket frames. Only text frames containing
-    // valid JSON messages are handled; binary frames and pings are ignored.
-    while let Some(Ok(msg)) = ws_stream.next().await {
-        match msg {
-            Message::Text(text) => {
-                if let Ok(ws_msg) = serde_json::from_str::<WsMessage>(&text) {
-                    handle_message(&state, &conn_id, &tx, &agent_id, ws_msg).await;
+    let conn_id_clone = conn_id.clone();
+    let cx = connection.clone();
+    let state_c = state.clone();
+    let inbound_streams_task = tokio::spawn(async move {
+        while let Ok((mut q_send, mut q_recv)) = cx.accept_bi().await {
+            // Read the 17-byte Data routing prefix
+            // [0x0A, 8-byte session_id, 8-byte stream_id]
+            let mut prefix = [0u8; 17];
+            if q_recv.read_exact(&mut prefix).await.is_err() {
+                continue;
+            }
+            if prefix[0] != 0x0A {
+                continue; // Not a Data stream
+            }
+
+            let sess_bytes = &prefix[1..9];
+            let sess_str =
+                String::from_utf8(sess_bytes.iter().filter(|&&c| c != 0).cloned().collect())
+                    .unwrap_or_default();
+            let strm_bytes = &prefix[9..17];
+            let strm_str =
+                String::from_utf8(strm_bytes.iter().filter(|&&c| c != 0).cloned().collect())
+                    .unwrap_or_default();
+
+            info!(
+                "New data stream for session {} / stream {}",
+                sess_str, strm_str
+            );
+
+            if let Some(session) = state_c.sessions.get(&sess_str) {
+                // Determine target connection ID
+                let target_conn_id = if conn_id_clone == session.controller_id {
+                    let mut agent_conn_id = None;
+                    if let Some(agent) = state_c.agents.get(&session.agent_id) {
+                        agent_conn_id = Some(agent.conn_id.clone());
+                    }
+                    agent_conn_id
+                } else {
+                    Some(session.controller_id.clone())
+                };
+
+                tracing::info!(
+                    "Finding target_id for session {} -> target {:?}",
+                    sess_str,
+                    target_conn_id
+                );
+                if let Some(target_id) = target_conn_id {
+                    if let Some(target_info) = state_c.connections.get(&target_id) {
+                        // Open stream to target and forward
+                        match target_info.conn.open_bi().await {
+                            Ok((mut t_send, mut t_recv)) => {
+                                // Forward the prefix
+                                if t_send.write_all(&prefix).await.is_ok() {
+                                    let sid_clone = sess_str.clone();
+                                    let target_id_c = target_id.clone();
+                                    tokio::spawn(async move {
+                                        tracing::info!(
+                                            "Starting proxy {} -> {}",
+                                            sid_clone,
+                                            target_id_c
+                                        );
+                                        let mut buf = [0u8; 8192];
+                                        let mut total = 0;
+                                        loop {
+                                            match tokio::io::AsyncReadExt::read(
+                                                &mut q_recv,
+                                                &mut buf,
+                                            )
+                                            .await
+                                            {
+                                                Ok(0) => break,
+                                                Ok(n) => {
+                                                    tracing::info!(
+                                                        "Proxy {} -> {}: read {} bytes",
+                                                        sid_clone,
+                                                        target_id_c,
+                                                        n
+                                                    );
+                                                    if let Err(e) =
+                                                        tokio::io::AsyncWriteExt::write_all(
+                                                            &mut t_send,
+                                                            &buf[..n],
+                                                        )
+                                                        .await
+                                                    {
+                                                        tracing::error!(
+                                                            "Proxy Error write {} -> {}: {}",
+                                                            sid_clone,
+                                                            target_id_c,
+                                                            e
+                                                        );
+                                                        break;
+                                                    }
+                                                    total += n;
+                                                }
+                                                Err(e) => {
+                                                    tracing::error!(
+                                                        "Proxy Error read {} -> {}: {}",
+                                                        sid_clone,
+                                                        target_id_c,
+                                                        e
+                                                    );
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        tracing::info!(
+                                            "Proxy {} -> {} finished, {} bytes",
+                                            sid_clone,
+                                            target_id_c,
+                                            total
+                                        );
+                                        let _ = t_send.finish();
+                                    });
+                                    let sid_clone2 = sess_str.clone();
+                                    let target_id_clone = target_id.clone();
+                                    tokio::spawn(async move {
+                                        tracing::info!(
+                                            "Starting proxy {} -> {}",
+                                            target_id_clone,
+                                            sid_clone2
+                                        );
+                                        let mut buf = [0u8; 8192];
+                                        let mut total = 0;
+                                        loop {
+                                            match tokio::io::AsyncReadExt::read(
+                                                &mut t_recv,
+                                                &mut buf,
+                                            )
+                                            .await
+                                            {
+                                                Ok(0) => break,
+                                                Ok(n) => {
+                                                    tracing::info!(
+                                                        "Proxy {} -> {}: read {} bytes",
+                                                        target_id_clone,
+                                                        sid_clone2,
+                                                        n
+                                                    );
+                                                    if let Err(e) =
+                                                        tokio::io::AsyncWriteExt::write_all(
+                                                            &mut q_send,
+                                                            &buf[..n],
+                                                        )
+                                                        .await
+                                                    {
+                                                        tracing::error!(
+                                                            "Proxy Error write {} -> {}: {}",
+                                                            target_id_clone,
+                                                            sid_clone2,
+                                                            e
+                                                        );
+                                                        break;
+                                                    }
+                                                    total += n;
+                                                }
+                                                Err(e) => {
+                                                    tracing::error!(
+                                                        "Proxy Error read {} -> {}: {}",
+                                                        target_id_clone,
+                                                        sid_clone2,
+                                                        e
+                                                    );
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        tracing::info!(
+                                            "Proxy {} -> {} finished, {} bytes",
+                                            target_id_clone,
+                                            sid_clone2,
+                                            total
+                                        );
+                                        let _ = q_send.finish();
+                                    });
+                                } else {
+                                    tracing::error!(
+                                        "Failed to write prefix to target stream for session {}",
+                                        sess_str
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                error!("Failed to open stream to target {}: {}", target_id, e);
+                            }
+                        }
+                    }
                 }
             }
-            Message::Close(_) => break,
-            _ => {}
+        }
+    });
+
+    // Inbound control loop reading framed messages
+    loop {
+        let mut len_buf = [0u8; 4];
+        if recv.read_exact(&mut len_buf).await.is_err() {
+            break;
+        }
+        let len = u32::from_le_bytes(len_buf) as usize;
+
+        // Prevent huge allocations
+        if len > 1024 * 1024 {
+            error!("Message too large: {}", len);
+            break;
+        }
+
+        let mut buf = vec![0u8; len];
+        if recv.read_exact(&mut buf).await.is_err() {
+            break;
+        }
+
+        match ControlMessage::deserialize(&buf) {
+            Ok(msg) => {
+                handle_message(&state, &conn_id, &tx, &agent_id, msg).await;
+            }
+            Err(e) => {
+                error!("Deserialize error: {}", e);
+                break;
+            }
         }
     }
 
-    // ── Cleanup on Disconnect ──
     info!("Disconnecting: {}", conn_id);
-
-    // Stop the outbound sender task
     outbound_task.abort();
-
-    // Remove this connection from the global registry
+    inbound_streams_task.abort();
     state.connections.remove(&conn_id);
 
-    // If this connection was a registered agent, clean up the agent
-    // registry and remove any tunnel sessions associated with it.
     let aid = agent_id.lock().await;
     if let Some(ref aid) = *aid {
         info!("Agent {} disconnected", aid);
         state.agents.remove(aid);
 
-        // Find and remove all sessions where this agent was involved,
-        // either as the agent or as the controller (via conn_id).
         let sessions_to_remove: Vec<String> = state
             .sessions
             .iter()
@@ -129,25 +314,14 @@ async fn handle_connection(socket: WebSocket, state: AppState) {
     }
 }
 
-// ─── Message Relay Helper ───────────────────────────────────────
-
-/// Routes a message to the "other side" of a tunnel based on who sent it.
-///
-/// - If `from_role` is `"agent"`, the message is forwarded to the controller.
-/// - If `from_role` is `"controller"`, the message is forwarded to the agent.
-///
-/// This is the core relay function that enables transparent data forwarding
-/// between the two endpoints of a tunnel session.
-fn relay_message(state: &AppState, session: &TunnelSession, msg: WsMessage, from_role: &str) {
+fn relay_message(state: &AppState, session: &TunnelSession, msg: ControlMessage, from_role: &str) {
     match from_role {
         "agent" => {
-            // Agent sent data → forward to the controller's connection
             if let Some(c) = state.connections.get(&session.controller_id) {
-                let _ = c.send(msg);
+                let _ = c.tx.send(msg);
             }
         }
         "controller" => {
-            // Controller sent data → forward to the agent's connection
             if let Some(a) = state.agents.get(&session.agent_id) {
                 let _ = a.tx.send(msg);
             }
@@ -156,44 +330,28 @@ fn relay_message(state: &AppState, session: &TunnelSession, msg: WsMessage, from
     }
 }
 
-// ─── Message Dispatcher ─────────────────────────────────────────
-
-/// Handles a single incoming WebSocket message from a client.
-///
-/// This is the central dispatch function that routes each message type
-/// to the appropriate logic:
-/// - **Register**: Adds the client to the agent registry
-/// - **Connect**: Creates a tunnel session and forwards the request to the target agent
-/// - **TunnelAccept**: Notifies the controller that the tunnel is ready
-/// - **StreamOpen/StreamClose**: Relayed to the other side of the tunnel
-/// - **Data**: Relayed to the other side based on the sender's role
-/// - **TunnelClose**: Tears down the session and notifies both sides
-/// - **Ping/Pong**: Heartbeat handling
 async fn handle_message(
     state: &AppState,
     conn_id: &str,
-    tx: &mpsc::UnboundedSender<WsMessage>,
+    tx: &mpsc::UnboundedSender<ControlMessage>,
     agent_id: &Arc<tokio::sync::Mutex<Option<String>>>,
-    msg: WsMessage,
+    msg: ControlMessage,
 ) {
     match msg {
-        // ── Agent Registration ──
-        WsMessage::Register => {
-            // Generate a unique, human-readable agent ID on the server
+        ControlMessage::Register => {
             let aid = generate_agent_id();
             info!("Agent registered: {} (conn={})", aid, conn_id);
-            // Store the agent in the registry with its message sender
-            state
-                .agents
-                .insert(aid.clone(), AgentInfo { tx: tx.clone() });
-            // Remember this connection's agent ID for cleanup on disconnect
+            state.agents.insert(
+                aid.clone(),
+                AgentInfo {
+                    tx: tx.clone(),
+                    conn_id: conn_id.to_string(),
+                },
+            );
             *agent_id.lock().await = Some(aid.clone());
-            // Send the assigned ID back to the client
-            let _ = tx.send(WsMessage::RegisterOk { agent_id: aid });
+            let _ = tx.send(ControlMessage::RegisterOk { agent_id: aid });
         }
-
-        // ── Controller Requests a Tunnel ──
-        WsMessage::Connect {
+        ControlMessage::Connect {
             target_id,
             remote_host,
             remote_port,
@@ -205,10 +363,8 @@ async fn handle_message(
 
             match state.agents.get(&target_id) {
                 Some(agent_info) => {
-                    // Generate a short session ID from a UUID
                     let session_id = Uuid::new_v4().to_string()[..8].to_string();
 
-                    // Create and store the tunnel session metadata
                     state.sessions.insert(
                         session_id.clone(),
                         TunnelSession {
@@ -220,61 +376,30 @@ async fn handle_message(
                         },
                     );
 
-                    // Forward the tunnel request to the target agent
-                    let _ = agent_info.tx.send(WsMessage::TunnelRequest {
+                    let _ = agent_info.tx.send(ControlMessage::TunnelRequest {
                         session_id,
                         remote_host,
                         remote_port,
                     });
                 }
                 None => {
-                    // Target agent not found; notify the controller
-                    let _ = tx.send(WsMessage::Error {
+                    let _ = tx.send(ControlMessage::Error {
                         message: format!("Agent '{}' not found", target_id),
                     });
                 }
             }
         }
-
-        // ── Agent Accepts the Tunnel ──
-        WsMessage::TunnelAccept { session_id } => {
+        ControlMessage::TunnelAccept { session_id } => {
             info!("Tunnel accepted: {}", session_id);
-            // Look up the session and notify the controller that the tunnel is ready
             if let Some(session) = state.sessions.get(&session_id) {
                 if let Some(c) = state.connections.get(&session.controller_id) {
-                    let _ = c.send(WsMessage::TunnelReady {
+                    let _ = c.tx.send(ControlMessage::TunnelReady {
                         session_id: session_id.clone(),
                     });
                 }
             }
         }
-
-        // ── Stream Multiplexing: Relay StreamOpen to the other side ──
-        WsMessage::StreamOpen {
-            session_id,
-            stream_id,
-        } => {
-            if let Some(session) = state.sessions.get(&session_id) {
-                // Determine who sent this message by comparing conn_id
-                let role = if conn_id == session.controller_id {
-                    "controller"
-                } else {
-                    "agent"
-                };
-                relay_message(
-                    state,
-                    &session,
-                    WsMessage::StreamOpen {
-                        session_id,
-                        stream_id,
-                    },
-                    role,
-                );
-            }
-        }
-
-        // ── Stream Multiplexing: Relay StreamClose to the other side ──
-        WsMessage::StreamClose {
+        ControlMessage::StreamOpen {
             session_id,
             stream_id,
         } => {
@@ -287,7 +412,7 @@ async fn handle_message(
                 relay_message(
                     state,
                     &session,
-                    WsMessage::StreamClose {
+                    ControlMessage::StreamOpen {
                         session_id,
                         stream_id,
                     },
@@ -295,55 +420,48 @@ async fn handle_message(
                 );
             }
         }
-
-        // ── Data Relay: Forward data to the other side of the tunnel ──
-        WsMessage::Data {
+        ControlMessage::StreamClose {
             session_id,
             stream_id,
-            role,
-            payload,
         } => {
             if let Some(session) = state.sessions.get(&session_id) {
+                let role = if conn_id == session.controller_id {
+                    "controller"
+                } else {
+                    "agent"
+                };
                 relay_message(
                     state,
                     &session,
-                    WsMessage::Data {
+                    ControlMessage::StreamClose {
                         session_id,
                         stream_id,
-                        role: role.clone(),
-                        payload,
                     },
-                    &role,
+                    role,
                 );
             }
         }
-
-        // ── Tunnel Teardown ──
-        WsMessage::TunnelClose { session_id } => {
+        ControlMessage::TunnelClose { session_id } => {
             info!("Tunnel closing: {}", session_id);
-            // Remove the session and notify both sides
             if let Some((_, session)) = state.sessions.remove(&session_id) {
-                let close_msg = WsMessage::TunnelClose {
+                let close_msg = ControlMessage::TunnelClose {
                     session_id: session.session_id,
                 };
-                // Notify the controller
                 if let Some(c) = state.connections.get(&session.controller_id) {
-                    let _ = c.send(close_msg.clone());
+                    let _ = c.tx.send(close_msg.clone());
                 }
-                // Notify the agent
                 if let Some(a) = state.agents.get(&session.agent_id) {
                     let _ = a.tx.send(close_msg);
                 }
             }
         }
-
-        // ── Heartbeat ──
-        WsMessage::Ping => {
-            let _ = tx.send(WsMessage::Pong);
+        ControlMessage::Ping => {
+            let _ = tx.send(ControlMessage::Pong);
         }
-        WsMessage::Pong => {
-            // No action needed; the pong confirms the connection is alive
-        }
-        _ => {}
+        ControlMessage::Pong
+        | ControlMessage::RegisterOk { .. }
+        | ControlMessage::Error { .. }
+        | ControlMessage::TunnelReady { .. }
+        | ControlMessage::TunnelRequest { .. } => {}
     }
 }

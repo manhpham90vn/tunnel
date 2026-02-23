@@ -6,17 +6,17 @@
 //!
 //! ## Module Organization
 //!
-//! - [`protocol`]  — WebSocket message types (must stay in sync with server)
+//! - [`protocol`]  — QUIC message types (must stay in sync with server)
 //! - [`state`]     — Application state (agent ID, tunnels, data channels)
 //! - [`commands`]  — Tauri IPC commands exposed to the React frontend
-//! - [`agent`]     — WebSocket connection loop and message handling
-//! - [`relay`]     — Per-stream TCP ↔ WebSocket bidirectional relay
+//! - [`agent`]     — QUIC connection loop and message handling
+//! - [`relay`]     — Per-stream TCP ↔ QUIC bidirectional relay
 
 mod agent;
-mod commands;
-mod protocol;
+pub mod cert;
+pub mod commands;
 mod relay;
-mod state;
+pub mod state;
 
 use state::AgentState;
 use std::sync::Arc;
@@ -24,7 +24,7 @@ use std::sync::Arc;
 /// Application entry point.
 ///
 /// Sets up logging, creates the shared agent state, registers Tauri commands,
-/// and spawns the background WebSocket connection loop.
+/// and spawns the background QUIC connection loop.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Initialize structured logging to stderr (visible in the terminal
@@ -52,7 +52,7 @@ pub fn run() {
             let app_handle = app.handle().clone();
             let state = agent_state.clone();
 
-            // Spawn the WebSocket connection loop on a dedicated OS thread
+            // Spawn the QUIC connection loop on a dedicated OS thread
             // with its own Tokio runtime. This keeps the agent loop isolated
             // from Tauri's main thread and event loop.
             std::thread::spawn(move || {
