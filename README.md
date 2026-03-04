@@ -1,8 +1,6 @@
-# 🚇 Tunnel
+# Tunnel
 
-Remote access between computers through a central relay server, similar to TeamViewer. The client acts as both an **Agent** (receives incoming tunnel requests) and a **Controller** (connects to remote agents).
-
-## How It Works
+Remote access between computers through a central relay server. The client acts as both an **Agent** (receives incoming tunnel requests) and a **Controller** (connects to remote agents).
 
 ```
 ┌─────────────────┐          ┌─────────────────┐          ┌─────────────────┐
@@ -14,172 +12,111 @@ Remote access between computers through a central relay server, similar to TeamV
     services                                                  on local port
 ```
 
-1. **Agent** registers with the relay server and receives a unique Agent ID (e.g., `A3F8-B2C1`)
-2. **Controller** enters the Agent ID, specifies target and local ports → creates a tunnel
-3. Data is relayed: `Controller local port` ↔ `QUIC Stream` ↔ `Agent target service`
-4. Agent auto-reconnects every 3 seconds if disconnected, with 30-second heartbeat keep-alive
+## The Problem
 
----
+When you need to access services on a remote machine (not on the same LAN), you often run into these issues:
 
-## Installation
+| Problem                             | Traditional Solution             | Limitations                                        |
+| ----------------------------------- | -------------------------------- | -------------------------------------------------- |
+| No public IP                        | VPN, Port forwarding, Reverse proxy | Requires router config, not supported on all networks |
+| NAT/Firewall blocking              | DMZ, UPnP                       | Insecure, not supported on all devices            |
+| Don't want to expose services       | TeamViewer, AnyDesk             | Resource-heavy, slow, depends on third-party       |
+| Need to access multiple machines   | Manual SSH tunnels              | Must configure each machine, hard to manage       |
 
-### Client (Tunnel Agent)
+## Solution
 
-Download the installer for your OS from [GitHub Releases](../../releases/latest):
+Tunnel creates TCP tunnel connections through a central relay server:
 
-| OS                        | File                                |
-| ------------------------- | ----------------------------------- |
-| **macOS** (Universal)     | `Tunnel Agent_x.x.x_universal.dmg`  |
-| **Linux** (Debian/Ubuntu) | `tunnel-agent_x.x.x_amd64.deb`      |
-| **Linux** (Other)         | `tunnel-agent_x.x.x_amd64.AppImage` |
-| **Windows**               | `Tunnel Agent_x.x.x_x64-setup.exe`  |
+- **Agent** registers with the server and receives a unique ID (e.g., `A3F8-B2C1`)
+- **Controller** enters Agent ID + target port → creates tunnel
+- Data is relayed: `localhost:local_port` ↔ `QUIC` ↔ `Agent:target_port`
 
-#### macOS
+### Advantages
 
-```bash
-open Tunnel\ Agent_*.dmg
-# Drag "Tunnel Agent" to Applications
+- No router/firewall configuration needed
+- No third-party dependency (self-host the relay server)
+- QUIC for low-latency with congestion control
+- Lightweight — just run the app on both machines
+
+## Use Cases
+
+### Remote SSH
+
+Access remote servers via SSH without public IP or VPN.
+
 ```
+# Agent: server machine with SSH (port 22)
+# Controller: local machine
+# → Create tunnel: Target Port 22, Local Port 2222
 
-#### Linux (Debian/Ubuntu)
-
-```bash
-sudo dpkg -i tunnel-agent_*_amd64.deb
-```
-
-#### Linux (AppImage)
-
-```bash
-chmod +x tunnel-agent_*_amd64.AppImage
-./tunnel-agent_*_amd64.AppImage
-```
-
-#### Windows
-
-Run `Tunnel Agent_x.x.x_x64-setup.exe` and follow the installer.
-
----
-
-### Server (Relay Server)
-
-The relay server forwards data between Agents and Controllers. Install it on a machine with a public IP address.
-
-Download `tunnel-server_x.x.x_amd64.deb` from [GitHub Releases](../../releases/latest):
-
-```bash
-# Install (systemd service is enabled automatically)
-sudo dpkg -i tunnel-server_*_amd64.deb
-
-# Check status
-sudo systemctl status tunnel-server
-
-# View logs
-sudo journalctl -u tunnel-server -f
-```
-
-The server listens on `0.0.0.0:7070` by default. Log level can be configured via the `RUST_LOG` environment variable.
-
-#### Uninstall
-
-```bash
-sudo systemctl stop tunnel-server
-sudo dpkg -r tunnel-server
-```
-
----
-
-## Usage
-
-### 1. Set Up the Server
-
-Install the relay server on a machine with a public IP. Ensure both **TCP port 7070** (for the REST API) and **UDP port 7070** (for the QUIC protocol) are open in your firewall.
-
-### 2. Connect the Agent
-
-1. Open **Tunnel Agent** on the machine you want to access remotely
-2. In **Server Settings**, enter the server IP and port (default: `7070`), then click **Save**
-3. The app auto-connects and displays your **Agent ID** — share this ID with the Controller
-
-### 3. Create a Tunnel (Controller)
-
-1. Open **Tunnel Agent** on your local machine
-2. In **Connect to Agent**, enter the target's **Agent ID**
-3. Set **Target Port** (the port on the agent's machine, e.g., `22` for SSH)
-4. Set **Local Port** (the port on your machine to access through, e.g., `2222`)
-5. Click **Connect**
-6. Access the remote service via `localhost:<local_port>`
-
-### Custom CA Certificates (Production)
-
-To connect securely in a production environment, you can instruct the client to verify the Relay Server's certificate against a custom CA. Set the `TUNNEL_CA_CERT` environment variable to the path of your PEM-encoded CA certificate file before starting the Tunnel Agent.
-
-```bash
-export TUNNEL_CA_CERT=/path/to/ca.pem
-```
-
-### Example: SSH
-
-```bash
-# Target Port: 22, Local Port: 2222
 ssh -p 2222 user@localhost
 ```
 
-### Example: Web App
+### Remote Desktop (RDP/VNC)
 
-```bash
-# Target Port: 3000, Local Port: 8080
-# Open http://localhost:8080 in your browser
+Control Windows/Mac/Linux machines remotely via remote desktop.
+
+```
+# Agent: target machine (RDP port 3389 or VNC port 5900)
+# Controller: local machine
+# → Create tunnel: Target Port 3389, Local Port 3389
+
+# Windows Remote Desktop: connect to localhost:3389
 ```
 
----
+### Local Web Server
 
-## Server API
+Share a dev webapp with others without deploying.
 
-| Endpoint      | Method | Description                        |
-| ------------- | ------ | ---------------------------------- |
-| `/api/agents` | GET    | List connected agents (JSON array) |
+```
+# Agent: dev machine running web server (port 3000)
+# Controller: reviewer's machine
+# → Create tunnel: Target Port 3000, Local Port 8080
 
----
-
-## Development
-
-### Prerequisites
-
-- Rust (stable)
-- Node.js 20+
-- Linux system libraries: `libwebkit2gtk-4.1-dev`, `libappindicator3-dev`, `librsvg2-dev`, `patchelf`
-
-### Run Locally
-
-```bash
-# Start the relay server (listens on HTTP 0.0.0.0:7070 and UDP 0.0.0.0:7070)
-cd server && cargo run
-
-# Start the client in dev mode
-cd client && npm run tauri dev
+# Open browser: http://localhost:8080
 ```
 
-### Build
+### Database Access
 
-```bash
-# Server .deb package
-cd server && cargo deb
+Access databases running on other machines from anywhere.
 
-# Client desktop app
-cd client && npx tauri build
+```
+# Agent: machine running PostgreSQL (port 5432)
+# Controller: dev laptop
+# → Create tunnel: Target Port 5432, Local Port 5432
+
+psql -h localhost -p 5432 -U myuser mydb
 ```
 
-### Lint
+### IoT / Device Management
 
-```bash
-# Server
-cd server && cargo fmt --check && cargo clippy -- -D warnings
+Manage IoT devices (Raspberry Pi, smart home hub) behind NAT.
 
-# Client
-cd client/src-tauri && cargo fmt --check && cargo clippy -- -D warnings
+```
+# Agent: Raspberry Pi with SSH (port 22) or Home Assistant (port 8123)
+# Controller: laptop
+# → Create tunnel: Target Port 8123, Local Port 8123
+
+# Open browser: http://localhost:8123
 ```
 
----
+### Internal Service Access
+
+Access internal tools (Grafana, Prometheus, admin dashboard) without exposing to the internet.
+
+```
+# Agent: machine running Grafana (port 3000)
+# Controller: dev machine
+# → Create tunnel: Target Port 3000, Local Port 9090
+
+# Open browser: http://localhost:9090
+```
+
+## Documentation
+
+- [Usage Guide](docs/USAGE.md) — Installation, configuration, usage examples
+- [Development Guide](docs/DEVELOPMENT.md) — Local dev, build, lint, CI/CD
+- [Architecture](docs/ARCHITECTURE.md) — Protocol, data flow, components
 
 ## Tech Stack
 
