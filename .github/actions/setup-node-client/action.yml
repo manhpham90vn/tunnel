@@ -1,0 +1,38 @@
+name: Setup Node Client
+
+description: Setup Node.js and install client dependencies with caching
+
+inputs:
+  install-deps:
+    description: 'Whether to install Linux dependencies for Tauri'
+    required: false
+    default: 'true'
+
+runs:
+  using: composite
+
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+        cache: npm
+        cache-dependency-path: "client/package-lock.json"
+
+    - name: Install Linux dependencies
+      if: inputs.install-deps == 'true' && runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libwebkit2gtk-4.1-dev \
+          libappindicator3-dev \
+          librsvg2-dev \
+          patchelf \
+          libglib2.0-dev \
+          libgtk-3-dev
+
+    - name: Install frontend dependencies
+      shell: bash
+      working-directory: client
+      run: npm ci

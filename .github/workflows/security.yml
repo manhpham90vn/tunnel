@@ -1,0 +1,131 @@
+name: Security Audit
+
+on:
+  schedule:
+    # Run weekly on Sundays at 00:00 UTC
+    - cron: "0 0 * * 0"
+  push:
+    branches: [main]
+    paths:
+      - "**/Cargo.lock"
+      - "**/Cargo.toml"
+      - "**/package-lock.json"
+      - "**/package.json"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ============================================
+  # Rust Security Audit
+  # ============================================
+  audit-rust:
+    name: Audit Rust Dependencies
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        workspace:
+          - { path: "server", name: "Server" }
+          - { path: "tunnel-protocol", name: "Protocol" }
+          - { path: "client/src-tauri", name: "Client" }
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          workspaces: |
+            server
+            tunnel-protocol
+            client/src-tauri
+
+      - name: Cache cargo-audit
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-audit
+          key: ${{ runner.os }}-cargo-audit
+
+      - name: Install cargo-audit
+        shell: bash
+        run: |
+          if ! command -v cargo-audit &> /dev/null; then
+            cargo install cargo-audit --locked
+          fi
+
+      - name: Run cargo audit (${{ matrix.workspace.name }})
+        working-directory: ${{ matrix.workspace.path }}
+        run: |
+          echo "::group::Audit for ${{ matrix.workspace.name }}"
+          cargo audit --json > audit-${{ matrix.workspace.name }}.json 2>/dev/null || true
+          cargo audit || true
+          echo "::endgroup::"
+
+      - name: Upload audit report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: audit-rust-${{ matrix.workspace.name }}
+          path: ${{ matrix.workspace.path }}/audit-*.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+  # ============================================
+  # NPM Security Audit
+  # ============================================
+  audit-npm:
+    name: Audit NPM Dependencies
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: "client/package-lock.json"
+
+      - name: Run npm audit
+        working-directory: client
+        run: |
+          echo "::group::NPM Audit"
+          npm audit --json > npm-audit.json 2>/dev/null || true
+          npm audit || true
+          echo "::endgroup::"
+
+      - name: Upload audit report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: audit-npm-client
+          path: client/npm-audit.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+  # ============================================
+  # Summary
+  # ============================================
+  security-summary:
+    name: Security Summary
+    needs: [audit-rust, audit-npm]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Report security status
+        run: |
+          echo "## Security Audit Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Audit Rust (Server) | ${{ needs.audit-rust.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Audit Rust (Protocol) | ${{ needs.audit-rust.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Audit Rust (Client) | ${{ needs.audit-rust.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Audit NPM (Client) | ${{ needs.audit-npm.result == 'success' && '✅' || '⚠️' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> ⚠️ Note: Audit failures don't block the workflow. Check artifacts for detailed reports." >> $GITHUB_STEP_SUMMARY
