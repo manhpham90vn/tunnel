@@ -29,12 +29,3 @@ runs:
       uses: swatinem/rust-cache@v2
       with:
         workspaces: ${{ inputs.workspaces }}
-
-    - name: Setup sccache
-      shell: bash
-      run: |
-        if ! command -v sccache &> /dev/null; then
-          cargo install sccache --locked || true
-        fi
-        echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
-        echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
